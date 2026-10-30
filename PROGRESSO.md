@@ -10,8 +10,8 @@ Este documento registra o status de execução de cada uma das 9 etapas de desen
 - [x] **Etapa 1: Planejamento, Arquitetura e Organização da Identidade Visual** (Concluída ✅)
 - [x] **Etapa 2: Implementação Completa das Telas do Público** (Concluída ✅)
 - [x] **Etapa 3: Desenvolvimento do Painel Administrativo** (Concluída ✅)
-- [ ] **Etapa 4: Painel Administrativo e Gestão de Resultados/Telão** (Aguardando autorização)
-- [ ] **Etapa 5: Controle de Rodadas, Sincronização em Tempo Real e Voto Único com Firebase** (Pendente)
+- [x] **Etapa 4: Configuração do Firebase e Modelo de Dados** (Concluída ✅)
+- [ ] **Etapa 5: Controle de Rodadas, Sincronização em Tempo Real e Voto Único com Firebase** (Aguardando autorização)
 - [ ] **Etapa 6: Consolidação de Resultados e Cálculo Oficial dos 20%** (Pendente)
 - [ ] **Etapa 7: Telão de Projeção, Pódio e Visualização de Métricas** (Pendente)
 - [ ] **Etapa 8: Relatórios, Exportação de Dados e Auditoria** (Pendente)
@@ -19,66 +19,62 @@ Este documento registra o status de execução de cada uma das 9 etapas de desen
 
 ---
 
-### Detalhamento da Etapa 3 — Concluída ✅
+### Detalhamento da Etapa 4 — Concluída ✅
 
-#### 1. Identidade Visual e Layout Administrativo
-- **Estilo:** Fundo escuro (`#050810`), cards tecnológicos (`#0B1526`), bordas luminosas em vermelho e azul, tipografia moderna e indicadores de status em tempo real.
-- **Logos Oficiais:**
-  - Login: `<ArenaLogo variant="complete" />` e `<ArenaMascot variant="transparent" />`.
-  - Sidebar: `<ArenaLogo variant="transparentText" />` no topo do menu lateral.
-- **Responsividade:** Suporte completo para telas grandes (monitores ultrawide, desktops e notebooks) e drawer recolhível para tablets e celulares sem perda de ações críticas.
+#### 1. Infraestrutura e Serviços Firebase
+- Configuração oficial dos serviços em [`src/firebase/config.ts`](file:///c:/Users/IZABELLAA/Documents/ARENA_VOICE_VOTO_POPULAR/src/firebase/config.ts):
+  - **Firebase Authentication:** Suporte a sessões anônimas para o público e e-mail/senha com Custom Claims para administradores.
+  - **Cloud Firestore:** Instância oficial com persistência local de dados e suporte ao Firebase Emulator Suite.
+  - **Cloud Functions:** Configuração v2 (`southamerica-east1`) para as 5 funções de backend.
+  - **Firebase Storage:** Bucket oficial para upload e visualização de banners de projetos.
+  - **Firebase Hosting:** Arquitetura SPA com rewrites para `index.html`.
+  - **Firebase App Check:** Preparado com provider reCAPTCHA v3 e suporte a debug token no ambiente de desenvolvimento local.
 
-#### 2. Componentes Criados e Integrados
-- [`AdminSidebar`](file:///c:/Users/IZABELLAA/Documents/ARENA_VOICE_VOTO_POPULAR/src/components/admin/AdminSidebar.tsx): Menu lateral com Projetos, Rodada, Resultados e Configurações; destaque vermelho com glow para o item ativo, indicador "Sistema Online" e botão de logout.
-- [`AdminHeader`](file:///c:/Users/IZABELLAA/Documents/ARENA_VOICE_VOTO_POPULAR/src/components/admin/AdminHeader.tsx): Topbar com botão toggle para mobile, atalho direto para o Telão (`/resultados/telao`) e badge de administrador.
-- [`AdminLayout`](file:///c:/Users/IZABELLAA/Documents/ARENA_VOICE_VOTO_POPULAR/src/components/layout/AdminLayout.tsx): Layout unificado combinando sidebar recolhível, cabeçalho e viewport de conteúdo.
-- [`ProjectCard`](file:///c:/Users/IZABELLAA/Documents/ARENA_VOICE_VOTO_POPULAR/src/components/admin/ProjectCard.tsx): Card com banner, número de ordem (#1), nome, categoria, descrição resumida, status Ativo/Inativo, indicador de seleção com anel vermelho e ações de ativar/desativar e editar.
-- [`ProjectForm`](file:///c:/Users/IZABELLAA/Documents/ARENA_VOICE_VOTO_POPULAR/src/components/admin/ProjectForm.tsx): Modal para cadastrar novo projeto ou editar existente (nome, categoria, descrição, ordem, status ativo/inativo e banner).
-- [`RoundStatus`](file:///c:/Users/IZABELLAA/Documents/ARENA_VOICE_VOTO_POPULAR/src/components/admin/RoundStatus.tsx): Badge com estados `Aguardando liberação`, `Votação aberta` e `Votação encerrada`.
-- [`RoundTimer`](file:///c:/Users/IZABELLAA/Documents/ARENA_VOICE_VOTO_POPULAR/src/components/admin/RoundTimer.tsx): Cronômetro da rodada em formato `MM:SS` com ícone pulsante e glow dourado.
-- [`VoteCounter`](file:///c:/Users/IZABELLAA/Documents/ARENA_VOICE_VOTO_POPULAR/src/components/admin/VoteCounter.tsx): Contador de votos em tempo real com animação de pulso e glow azul.
-- [`AdminActionButton`](file:///c:/Users/IZABELLAA/Documents/ARENA_VOICE_VOTO_POPULAR/src/components/admin/AdminActionButton.tsx): Botão tecnológico com variantes `danger` (Vermelho), `primary` (Azul), `gold` (Amarelo) e `secondary` (Cinza escuro).
+#### 2. Autenticação do Público e Administrativa
+- Implementação em [`src/services/authService.ts`](file:///c:/Users/IZABELLAA/Documents/ARENA_VOICE_VOTO_POPULAR/src/services/authService.ts):
+  - **Público:** Autenticação anônima instantânea sem solicitação de e-mail ou senha, persistente no navegador via `browserLocalPersistence`.
+  - **Administrativa:** Validação obrigatória de Custom Claims no servidor (`token.admin === true` ou `token.role === 'admin'`). O acesso a rotas `/admin` não concede privilégios de escrita nem permissões de execução.
 
-#### 3. Telas Administrativas Desenvolvidas
+#### 3. Modelo de Dados Oficial do Firestore
+- Tipagem TypeScript estrita em [`src/types/firebase.ts`](file:///c:/Users/IZABELLAA/Documents/ARENA_VOICE_VOTO_POPULAR/src/types/firebase.ts):
+  - **`events`**: Metadados, status (`draft`, `active`, `finished`), `currentRoundId`, `currentProjectId`, `resultsPublished`.
+  - **`projects`**: `eventId`, `name`, `description`, `bannerUrl`, `order`, `active`.
+  - **`rounds`**: `eventId`, `projectId`, `status` (`waiting`, `open`, `closed`), `startedAt`, `endedAt`.
+  - **`votes`**: `eventId`, `roundId`, `projectId`, `voterUid`, `innovation` (1 a 5), `impact` (1 a 5), `development` (1 a 5).
+  - **`results`**: `eventId`, `projectId`, `totalVotes`, `sumInnovation`, `sumImpact`, `sumDevelopment`, `averageInnovation`, `averageImpact`, `averageDevelopment`, `averageGeneral`, `percentage`, `popularPoints`.
+- Todos os documentos possuem particionamento por `eventId` para suportar múltiplas edições e isolamento de dados.
 
-1. **Login Administrativo (`/admin/login`):**
-   - Arquivo: [`src/pages/admin/AdminLoginPage.tsx`](file:///c:/Users/IZABELLAA/Documents/ARENA_VOICE_VOTO_POPULAR/src/pages/admin/AdminLoginPage.tsx).
-   - Logo oficial completa, campos de e-mail e senha, botão ENTRAR, feedback visual de erro, estado de carregamento e sem credenciais fixadas no código. Preparado para integração com Firebase Authentication.
+#### 4. Identificação e Prevenção de Votos Duplicados
+- Implementação da chave determinística:
+  $$\text{voteId} = \text{eventId} + \text{"\_"} + \text{projectId} + \text{"\_"} + \text{voterUid}$$
+- Transação atômica em Cloud Function (`submitVote`) impedindo que o mesmo UID anônimo vote mais de uma vez no mesmo projeto.
+- Documentado que a identificação anônima garante voto único por UID/dispositivo autenticado, mas não substitui verificação biométrica/física de CPF.
 
-2. **Gerenciamento de Projetos (`/admin/projetos`):**
-   - Arquivo: [`src/pages/admin/AdminProjectsPage.tsx`](file:///c:/Users/IZABELLAA/Documents/ARENA_VOICE_VOTO_POPULAR/src/pages/admin/AdminProjectsPage.tsx).
-   - Visualização em grid de cards dos projetos cadastrados.
-   - Seleção de projeto ativo com destaque luminoso vermelho.
-   - Cadastro e edição de projetos via modal [`ProjectForm`](file:///c:/Users/IZABELLAA/Documents/ARENA_VOICE_VOTO_POPULAR/src/components/admin/ProjectForm.tsx).
-   - Botão amarelo **LIBERAR VOTAÇÃO** que atualiza o projeto ativo e navega para o controle da rodada.
+#### 5. Regras de Segurança do Firestore (`firestore.rules`)
+- **Negação Padrão:** `allow read, write: if false;`
+- **Votos (`votes`):** Escrita direta pelo cliente bloqueada (`allow write: if false;`). Registro executado exclusivamente via Cloud Functions com Admin SDK. Leitura restrita ao próprio autor do voto (`voterUid == request.auth.uid`) ou admin.
+- **Resultados (`results`):** Escrita direta pelo cliente bloqueada.
+- **Projetos e Rodadas:** Escrita restrita a administradores validados via claims.
 
-3. **Controle da Rodada (`/admin/rodada`):**
-   - Arquivo: [`src/pages/admin/AdminRoundPage.tsx`](file:///c:/Users/IZABELLAA/Documents/ARENA_VOICE_VOTO_POPULAR/src/pages/admin/AdminRoundPage.tsx).
-   - Exibição do projeto em avaliação no momento com banner e categoria.
-   - Status da rodada (`aberta`, `aguardando`, `encerrada`).
-   - Métricas em tempo real: contador de votos e cronômetro de tempo decorrido.
-   - Botão vermelho **ENCERRAR AVALIAÇÃO** / **REABRIR AVALIAÇÃO**.
-   - Botão azul **PRÓXIMO PROJETO** que avança para o próximo concorrente sem abrir automaticamente a votação (status `aguardando`), garantindo total controle pelo operador.
-   - Botão secundário **GERAR DASHBOARD** direcionando para a consolidação de resultados.
+#### 6. Regras de Segurança do Storage (`storage.rules`)
+- Banners armazenados em `events/{eventId}/banners/{projectId}/{fileName}`.
+- Validação de formato (apenas `image/jpeg`, `image/png`, `image/webp`) e tamanho máximo de 5 MB.
+- Escrita restrita exclusivamente a administradores autenticados.
+- Logos e arquivos de marca continuam estáticos locais em `public/assets/branding/`.
 
-4. **Configurações Gerais (`/admin/configuracoes`):**
-   - Arquivo: [`src/pages/admin/AdminSettingsPage.tsx`](file:///c:/Users/IZABELLAA/Documents/ARENA_VOICE_VOTO_POPULAR/src/pages/admin/AdminSettingsPage.tsx).
-   - Seções dedicadas para:
-     - Nome e subtítulo oficial do evento.
-     - Status do evento (planejado, em andamento, pausado, encerrado).
-     - Ordem de apresentação dos projetos com botões de subir/descer.
-     - Configurações do telão (ativação e tempo padrão da rodada).
-     - Informações de armazenamento e banners.
-     - Tabela de gerenciamento de administradores e operadores autorizados com aviso de segurança para operações críticas.
+#### 7. Cloud Functions de Backend (`functions/src/`)
+- Módulos desenvolvidos e compilados (`tsc` 0 erros):
+  1. [`openRound`](file:///c:/Users/IZABELLAA/Documents/ARENA_VOICE_VOTO_POPULAR/functions/src/rounds/openRound.ts): Fecha rodadas anteriores, cria nova rodada com status `open` e atualiza o evento.
+  2. [`closeRound`](file:///c:/Users/IZABELLAA/Documents/ARENA_VOICE_VOTO_POPULAR/functions/src/rounds/closeRound.ts): Encerra a rodada ativa com timestamp de término.
+  3. [`prepareNextRound`](file:///c:/Users/IZABELLAA/Documents/ARENA_VOICE_VOTO_POPULAR/functions/src/rounds/prepareNextRound.ts): Prepara o próximo projeto com status `waiting` sem abrir automaticamente a votação.
+  4. [`submitVote`](file:///c:/Users/IZABELLAA/Documents/ARENA_VOICE_VOTO_POPULAR/functions/src/voting/submitVote.ts): Transação atômica de validação, gravação determinística e recálculo instantâneo das médias de pontuação popular.
+  5. [`getAdminResults`](file:///c:/Users/IZABELLAA/Documents/ARENA_VOICE_VOTO_POPULAR/functions/src/results/getAdminResults.ts): Relatório administrativo consolidado ordenado por média geral.
 
-#### 4. Modelagem e Separação de Dados
-- Arquivo de tipos: [`src/types/index.ts`](file:///c:/Users/IZABELLAA/Documents/ARENA_VOICE_VOTO_POPULAR/src/types/index.ts) com `Project`, `Round`, `EventConfig`, `AdminUser`, `ProjectResult` e `Vote`.
-- Arquivo de serviço mock: [`src/services/adminMockService.ts`](file:///c:/Users/IZABELLAA/Documents/ARENA_VOICE_VOTO_POPULAR/src/services/adminMockService.ts) isolando os dados de teste e preparando o terreno para a integração Firebase (Etapa 5).
-
-#### 5. Homologação e Build
-- Compilação TypeScript (`tsc`) e empacotamento (`vite build`) finalizados com sucesso (0 erros de tipagem).
-- Todas as telas públicas e componentes da Etapa 2 foram integralmente preservados.
+#### 8. Ambiente Local e Requisitos de Plano
+- Índices compostos configurados em [`firestore.indexes.json`](file:///c:/Users/IZABELLAA/Documents/ARENA_VOICE_VOTO_POPULAR/firestore.indexes.json).
+- Script de teste e seed criado em [`scripts/seedEmulators.js`](file:///c:/Users/IZABELLAA/Documents/ARENA_VOICE_VOTO_POPULAR/scripts/seedEmulators.js).
+- **Esclarecimento de Plano:** No plano gratuito **Spark**, o Firestore, Authentication, Hosting, Storage e o **Firebase Emulator Suite** operam normalmente sem custos. Para deploy de Cloud Functions em produção no Google Cloud, a infraestrutura do Google exige o plano **Blaze** (Pay-as-you-go). No entanto, todo o desenvolvimento e homologação local no Emulator Suite dispensa cartão de crédito ou ativação de faturamento.
 
 ---
 
-**Status Atual:** Etapa 3 finalizada com sucesso. Aguardando autorização do usuário para iniciar a **Etapa 4**.
+**Status Atual:** Etapa 4 finalizada com sucesso. Aguardando autorização do usuário para iniciar a **Etapa 5**.

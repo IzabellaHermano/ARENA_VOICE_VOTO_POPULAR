@@ -3,6 +3,8 @@
  * Baseado no modelo de dados oficial especificado nas referências arquiteturais
  */
 
+export * from './firebase';
+
 export interface Project {
   id: string;
   nome: string;
@@ -14,7 +16,7 @@ export interface Project {
 }
 
 export interface Vote {
-  id: string; // formato: `${projetoId}_${uid}`
+  id: string; // formato determinístico: `${eventId}_${projectId}_${uid}`
   projetoId: string;
   uid: string; // anônimo gerado pelo Firebase Auth
   inovacao: number; // 1 a 5

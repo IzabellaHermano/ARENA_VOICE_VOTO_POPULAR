@@ -15,12 +15,13 @@ Sistema web de votação popular em tempo real para o evento **Arena Voice**, pe
 - **Animações:** [Framer Motion](https://www.framer.com/motion/)
 
 ### Backend e Infraestrutura (Firebase)
-- **Autenticação:** Firebase Auth (Admin via E-mail/Senha; Público via login anônimo sem cadastro prévio)
-- **Banco de Dados:** Cloud Firestore em tempo real (Coleções `projetos`, `votos`, `rodada`)
-- **Regras de Segurança:** Firestore Security Rules impedindo duplicidade de votos (`${projetoId}_${uid}`) e limitando notas entre 1 e 5
-- **Cloud Functions:** Estrutura modular preparada em `functions/src/` (`voting`, `rounds`, `results`)
+- **Autenticação:** Firebase Auth (Admin via E-mail/Senha com Custom Claims no servidor; Público via login anônimo sem cadastro prévio, persistente no navegador)
+- **Banco de Dados:** Cloud Firestore em tempo real com dados particionados por `eventId` nas coleções: `events`, `projects`, `rounds`, `votes` e `results`
+- **Regras de Segurança:** `firestore.rules` com negação padrão, bloqueio de escrita direta de votos e resultados pelo cliente, e acesso exclusivo via Cloud Functions
+- **Cloud Functions v2:** `openRound`, `closeRound`, `prepareNextRound`, `submitVote` e `getAdminResults` com validação de permissões no servidor
+- **Armazenamento:** Firebase Storage (`storage.rules`) para upload de banners com validação de MIME e tamanho máximo (5 MB)
 - **Hospedagem:** Firebase Hosting com SSL/HTTPS nativo
-- **Emuladores:** Firebase Emulator Suite configurado em `firebase.json`
+- **Emuladores:** Firebase Emulator Suite configurado em `firebase.json` (portas 9099, 8080, 5001, 5000, 4000)
 
 ---
 

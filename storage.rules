@@ -1,10 +1,35 @@
 rules_version = '2';
 service firebase.storage {
   match /b/{bucket}/o {
+
+    // Negação padrão para qualquer caminho não explicitado
     match /{allPaths=**} {
-      allow read: if true;
-      allow write: if request.auth != null;
+      allow read, write: if false;
+    }
+
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isAdmin() {
+      return isAuthenticated() && (
+        request.auth.token.admin == true ||
+        request.auth.token.role == 'admin' ||
+        request.auth.token.role == 'superadmin'
+      );
+    }
+
+    // Validações rigorosas de tipo MIME e tamanho máximo para imagens de banner (máx. 5 MB)
+    function isValidBannerImage() {
+      return request.resource.contentType.matches('image/(jpeg|png|webp)')
+          && request.resource.size <= 5 * 1024 * 1024;
+    }
+
+    // Caminho exclusivo para banners dos projetos vinculados aos eventos:
+    // events/{eventId}/banners/{projectId}/{fileName}
+    match /events/{eventId}/banners/{projectId}/{fileName} {
+      allow read: if true; // Leitura pública para exibição nas telas mobile e telão
+      allow write: if isAdmin() && isValidBannerImage(); // Apenas administradores podem fazer upload
     }
   }
 }
-
