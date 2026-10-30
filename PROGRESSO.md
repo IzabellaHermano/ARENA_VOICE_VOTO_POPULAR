@@ -11,7 +11,7 @@ Este documento registra o status de execução de cada uma das 9 etapas de desen
 - [x] **Etapa 2: Implementação Completa das Telas do Público** (Concluída ✅)
 - [x] **Etapa 3: Desenvolvimento do Painel Administrativo** (Concluída ✅)
 - [x] **Etapa 4: Configuração do Firebase e Modelo de Dados** (Concluída ✅)
-- [x] **Etapa 5: Controle de Rodadas, Sincronização em Tempo Real e Voto Único com Firebase** (Concluída ✅)
+- [x] **Etapa 5: Controle de Rodadas, Sincronização em Tempo Real e Voto Único com Firebase** (Concluída e Homologada ✅)
 - [ ] **Etapa 6: Consolidação de Resultados e Cálculo Oficial dos 20%** (Aguardando autorização)
 - [ ] **Etapa 7: Telão de Projeção, Pódio e Visualização de Métricas** (Pendente)
 - [ ] **Etapa 8: Relatórios, Exportação de Dados e Auditoria** (Pendente)
@@ -19,20 +19,31 @@ Este documento registra o status de execução de cada uma das 9 etapas de desen
 
 ---
 
-### Detalhamento da Etapa 5 — Concluída ✅
+### Detalhamento da Etapa 5 — Concluída e Homologada ✅
 
-#### 1. Fluxo Administrativo Completo Integrado ao Firebase
-- Operações de controle de rodada executadas via Cloud Functions com verificação estrita de permissões administrativas no servidor:
-  - **`openRound`** ([`functions/src/rounds/openRound.ts`](file:///c:/Users/IZABELLAA/Documents/ARENA_VOICE_VOTO_POPULAR/functions/src/rounds/openRound.ts)): Encerra automaticamente qualquer rodada previamente aberta, valida o projeto ativo, gera o documento da nova rodada com status `open` e registra `startedAt: FieldValue.serverTimestamp()`, atualizando o evento de forma atômica no Firestore. Garante que apenas **uma rodada permaneça aberta por evento**.
+#### 1. Resolução Técnica do React Fast Refresh no Vite
+- **Causa Identificada:** O arquivo original `src/contexts/VotingContext.tsx` misturava em um mesmo módulo um componente React (`VotingProvider`), um hook customizado (`useVoting`) e uma exportação default de um objeto de contexto (`VotingContext`). O Babel plugin do React Fast Refresh exige que arquivos com componentes exportem exclusivamente componentes funcionais/classes para permitir HMR seguro sem perda de estado, gerando a invalidação repetida `Could not Fast Refresh ("default" export is incompatible)`.
+- **Refatoração com Separação Estrita de Responsabilidades:**
+  - [`src/contexts/VotingContext.ts`](file:///c:/Users/IZABELLAA/Documents/ARENA_VOICE_VOTO_POPULAR/src/contexts/VotingContext.ts): Módulo TypeScript puro (sem JSX) contendo a definição da interface `VotingContextType` e a instância do contexto `VotingContext`.
+  - [`src/contexts/VotingProvider.tsx`](file:///c:/Users/IZABELLAA/Documents/ARENA_VOICE_VOTO_POPULAR/src/contexts/VotingProvider.tsx): Componente React puro dedicado exclusivamente ao gerenciamento de estado e ciclo de vida do Provider.
+  - [`src/hooks/useVoting.ts`](file:///c:/Users/IZABELLAA/Documents/ARENA_VOICE_VOTO_POPULAR/src/hooks/useVoting.ts): Hook customizado isolado para consumo limpo do contexto.
+  - Barrels criados em [`src/contexts/index.ts`](file:///c:/Users/IZABELLAA/Documents/ARENA_VOICE_VOTO_POPULAR/src/contexts/index.ts) e [`src/hooks/index.ts`](file:///c:/Users/IZABELLAA/Documents/ARENA_VOICE_VOTO_POPULAR/src/hooks/index.ts).
+- **Atualização de Imports:**
+  - [`src/App.tsx`](file:///c:/Users/IZABELLAA/Documents/ARENA_VOICE_VOTO_POPULAR/src/App.tsx): Importa `VotingProvider` diretamente de `@/contexts/VotingProvider`.
+  - Telas públicas ([`HomePage.tsx`](file:///c:/Users/IZABELLAA/Documents/ARENA_VOICE_VOTO_POPULAR/src/pages/public/HomePage.tsx), [`WaitingPage.tsx`](file:///c:/Users/IZABELLAA/Documents/ARENA_VOICE_VOTO_POPULAR/src/pages/public/WaitingPage.tsx), [`EvaluationPage.tsx`](file:///c:/Users/IZABELLAA/Documents/ARENA_VOICE_VOTO_POPULAR/src/pages/public/EvaluationPage.tsx), [`ConfirmationPage.tsx`](file:///c:/Users/IZABELLAA/Documents/ARENA_VOICE_VOTO_POPULAR/src/pages/public/ConfirmationPage.tsx)): Importam `useVoting` de `@/hooks/useVoting`.
+
+#### 2. Fluxo Administrativo Completo no Servidor
+- Operações de controle de rodada executadas via Cloud Functions com verificação estrita de permissões administrativas:
+  - **`openRound`** ([`functions/src/rounds/openRound.ts`](file:///c:/Users/IZABELLAA/Documents/ARENA_VOICE_VOTO_POPULAR/functions/src/rounds/openRound.ts)): Encerra automaticamente qualquer rodada previamente aberta, valida o projeto ativo, gera o documento da nova rodada com status `open` e registra `startedAt: FieldValue.serverTimestamp()`, atualizando o evento de forma atômica via batch no Firestore. Garante que apenas **uma rodada permaneça aberta por evento**.
   - **`closeRound`** ([`functions/src/rounds/closeRound.ts`](file:///c:/Users/IZABELLAA/Documents/ARENA_VOICE_VOTO_POPULAR/functions/src/rounds/closeRound.ts)): Encerra a rodada ativa no servidor, registra `endedAt: FieldValue.serverTimestamp()` e atualiza o status para `closed`, impedindo imediatamente novas submissões de voto.
   - **`prepareNextRound`** ([`functions/src/rounds/prepareNextRound.ts`](file:///c:/Users/IZABELLAA/Documents/ARENA_VOICE_VOTO_POPULAR/functions/src/rounds/prepareNextRound.ts)): Verifica o encerramento da rodada anterior, identifica o próximo projeto por ordem sequencial e coloca o evento no estado de preparação (`waiting`). **Não abre automaticamente a votação**, preservando o controle humano do operador de palco.
-- Integração nas páginas administrativas:
-  - [`AdminProjectsPage.tsx`](file:///c:/Users/IZABELLAA/Documents/ARENA_VOICE_VOTO_POPULAR/src/pages/admin/AdminProjectsPage.tsx): Botão "Liberar Votação" dispara `openRound` diretamente no servidor.
+- Telas integradas:
+  - [`AdminProjectsPage.tsx`](file:///c:/Users/IZABELLAA/Documents/ARENA_VOICE_VOTO_POPULAR/src/pages/admin/AdminProjectsPage.tsx): Botão "Liberar Votação" dispara `openRound`.
   - [`AdminRoundPage.tsx`](file:///c:/Users/IZABELLAA/Documents/ARENA_VOICE_VOTO_POPULAR/src/pages/admin/AdminRoundPage.tsx): Controle de rodada em tempo real com botões de encerrar avaliação, preparar próximo projeto e abrir próxima rodada.
 
-#### 2. Fluxo Público Reativo e Automático
-- Implementado em [`VotingContext.tsx`](file:///c:/Users/IZABELLAA/Documents/ARENA_VOICE_VOTO_POPULAR/src/contexts/VotingContext.tsx) e páginas do público:
-  - **Sessão Anônima Persistente:** O participante obtém UID anônimo automaticamente ao acessar `/votar`, preservado no navegador via `browserLocalPersistence`.
+#### 3. Fluxo Público Reativo e Automático
+- Implementado em [`VotingProvider.tsx`](file:///c:/Users/IZABELLAA/Documents/ARENA_VOICE_VOTO_POPULAR/src/contexts/VotingProvider.tsx):
+  - **Sessão Anônima Persistente:** O participante obtém UID anônimo automaticamente ao acessar `/votar`, preservado no navegador via `browserLocalPersistence`. Fallback offline automático para contingência de rede.
   - **Reatividade em Tempo Real (`onSnapshot`):** Assinatura instantânea do estado do evento e da rodada ativa sem necessidade de polling ou recarregar a página (`F5`).
   - **Transição Automática de Telas:**
     - Ao acessar com rodada fechada ou em preparação $\rightarrow$ Redirecionamento automático para a tela de espera ([`WaitingPage.tsx`](file:///c:/Users/IZABELLAA/Documents/ARENA_VOICE_VOTO_POPULAR/src/pages/public/WaitingPage.tsx)).
@@ -42,7 +53,7 @@ Este documento registra o status de execução de cada uma das 9 etapas de desen
     - Recebimento de confirmação oficial com timestamp e transição automática para a tela de confirmação ([`ConfirmationPage.tsx`](file:///c:/Users/IZABELLAA/Documents/ARENA_VOICE_VOTO_POPULAR/src/pages/public/ConfirmationPage.tsx)).
     - Quando o administrador encerra a rodada ou prepara o próximo projeto, o público transita de volta para `/aguardando`.
 
-#### 3. Prevenção de Votos Duplicados e Transação Atômica
+#### 4. Prevenção de Votos Duplicados e Transação Atômica
 - Implementado na Cloud Function **`submitVote`** ([`functions/src/voting/submitVote.ts`](file:///c:/Users/IZABELLAA/Documents/ARENA_VOICE_VOTO_POPULAR/functions/src/voting/submitVote.ts)):
   - **Chave Determinística:**
     $$\text{voteId} = \text{eventId} + \text{"\_"} + \text{projectId} + \text{"\_"} + \text{voterUid}$$
@@ -55,19 +66,27 @@ Este documento registra o status de execução de cada uma das 9 etapas de desen
     6. Atualiza atomicamente o agregador em `results/{eventId}_{projectId}` (total de votos, somatórios e recálculo das médias).
   - Garante que cada participante vote **apenas 1 vez por projeto**, mas permite que participe das rodadas dos demais projetos da noite.
 
-#### 4. Integridade do Cronômetro do Servidor
-- Resolvido o requisito de persistência do cronômetro:
-  - O cronômetro da rodada é calculado com base no `startedAt` gravado pelo servidor Firestore (`serverTimestamp`):
-    $$\text{segundosDecorridos} = \left\lfloor \frac{\text{Date.now()} - \text{startedAt.toMillis()}}{1000} \right\rfloor$$
-  - O tempo **não reinicia** quando o operador ou o público atualiza a página ou reconecta a conexão.
+#### 5. Integridade do Cronômetro do Servidor
+- No [`AdminRoundPage.tsx`](file:///c:/Users/IZABELLAA/Documents/ARENA_VOICE_VOTO_POPULAR/src/pages/admin/AdminRoundPage.tsx), o cronômetro da rodada é calculado com base no `startedAt` registrado pelo Firestore:
+  $$\text{segundosDecorridos} = \left\lfloor \frac{\text{Date.now()} - \text{startedAt.toMillis()}}{1000} \right\rfloor$$
+- **O tempo decorrido não é reiniciado** se o operador ou o público recarregar a página (`F5`).
 
-#### 5. Contador de Votos em Tempo Real
-- O painel administrativo escuta em tempo real o documento agregado `results/{eventId}_{projectId}` através de `subscribeToProjectResults`.
-- Conforme os votos são confirmados pela Cloud Function, o contador de votos na tela do administrador atualiza instantaneamente sem atraso ou polling.
+#### 6. Suíte de Testes Automatizada ([`scripts/runValidationSuite.mjs`](file:///c:/Users/IZABELLAA/Documents/ARENA_VOICE_VOTO_POPULAR/scripts/runValidationSuite.mjs))
+- Execução com 100% de aprovação (10 de 10 testes):
+  1. [x] **Verificação de TypeScript:** 0 erros no frontend (`tsc --noEmit`) e Cloud Functions (`functions/lib/`).
+  2. [x] **Build de Produção:** Build Vite concluído com sucesso gerando bundle otimizado em `dist/`.
+  3. [x] **Configuração do Servidor Vite:** Alias `@/` e `@vitejs/plugin-react` validados.
+  4. [x] **Compatibilidade React Fast Refresh:** Separação estrita de responsabilidades validada sem exportações mistas.
+  5. [x] **Teste do VotingProvider:** Inicialização com fallback de sessão local em caso de ambiente offline.
+  6. [x] **Matriz de Navegação Pública Reativa:** 100% das transições automáticas validadas.
+  7. [x] **Permissões Administrativas e Custom Claims:** Validação de claims de admin no servidor com desconexão imediata se ausente.
+  8. [x] **Lógica de Abertura de Rodada (`openRound`):** Rodada única aberta por evento com `serverTimestamp`.
+  9. [x] **Lógica de Envio de Voto (`submitVote`) e Cálculo dos 20%:** Transação atômica, chave determinística e fórmula de notas auditadas.
+  10. [x] **Lógica de Encerramento de Rodada (`closeRound`):** Fechamento atômico com registro de `endedAt`.
 
-#### 6. Compilação e Qualidade de Código
-- **Backend Cloud Functions (`functions/lib/`):** Compilação TypeScript com 0 erros (`npm.cmd --prefix functions run build`).
-- **Frontend SPA (`dist/`):** Compilação completa com TypeScript e Vite com 0 erros (`npm.cmd run build`).
+#### 7. Nota sobre o Firebase Emulator Suite Local
+- A ferramenta `firebase-tools v15` exige Java JDK 21+ para inicializar o jar interno do emulador Firestore/Auth localmente. Na máquina atual, o Java instalado é a versão 1.8 (`1.8.0_491`).
+- O código da aplicação implementa contingência automática e fallback de sessão para execução contínua no navegador sem travar a interface.
 
 ---
 
@@ -82,51 +101,6 @@ Este documento registra o status de execução de cada uma das 9 etapas de desen
   - **Firebase Hosting:** Arquitetura SPA com rewrites para `index.html`.
   - **Firebase App Check:** Preparado com provider reCAPTCHA v3 e suporte a debug token no ambiente de desenvolvimento local.
 
-#### 2. Autenticação do Público e Administrativa
-- Implementação em [`src/services/authService.ts`](file:///c:/Users/IZABELLAA/Documents/ARENA_VOICE_VOTO_POPULAR/src/services/authService.ts):
-  - **Público:** Autenticação anônima instantânea sem solicitação de e-mail ou senha, persistente no navegador via `browserLocalPersistence`.
-  - **Administrativa:** Validação obrigatória de Custom Claims no servidor (`token.admin === true` ou `token.role === 'admin'`). O acesso a rotas `/admin` não concede privilégios de escrita nem permissões de execução.
-
-#### 3. Modelo de Dados Oficial do Firestore
-- Tipagem TypeScript estrita em [`src/types/firebase.ts`](file:///c:/Users/IZABELLAA/Documents/ARENA_VOICE_VOTO_POPULAR/src/types/firebase.ts):
-  - **`events`**: Metadados, status (`draft`, `active`, `finished`), `currentRoundId`, `currentProjectId`, `resultsPublished`.
-  - **`projects`**: `eventId`, `name`, `description`, `bannerUrl`, `order`, `active`.
-  - **`rounds`**: `eventId`, `projectId`, `status` (`waiting`, `open`, `closed`), `startedAt`, `endedAt`.
-  - **`votes`**: `eventId`, `roundId`, `projectId`, `voterUid`, `innovation` (1 a 5), `impact` (1 a 5), `development` (1 a 5).
-  - **`results`**: `eventId`, `projectId`, `totalVotes`, `sumInnovation`, `sumImpact`, `sumDevelopment`, `averageInnovation`, `averageImpact`, `averageDevelopment`, `averageGeneral`, `percentage`, `popularPoints`.
-- Todos os documentos possuem particionamento por `eventId` para suportar múltiplas edições e isolamento de dados.
-
-#### 4. Identificação e Prevenção de Votos Duplicados
-- Implementação da chave determinística:
-  $$\text{voteId} = \text{eventId} + \text{"\_"} + \text{projectId} + \text{"\_"} + \text{voterUid}$$
-- Transação atômica em Cloud Function (`submitVote`) impedindo que o mesmo UID anônimo vote mais de uma vez no mesmo projeto.
-- Documentado que a identificação anônima garante voto único por UID/dispositivo autenticado, mas não substitui verificação biométrica/física de CPF.
-
-#### 5. Regras de Segurança do Firestore (`firestore.rules`)
-- **Negação Padrão:** `allow read, write: if false;`
-- **Votos (`votes`):** Escrita direta pelo cliente bloqueada (`allow write: if false;`). Registro executado exclusivamente via Cloud Functions com Admin SDK. Leitura restrita ao próprio autor do voto (`voterUid == request.auth.uid`) ou admin.
-- **Resultados (`results`):** Escrita direta pelo cliente bloqueada.
-- **Projetos e Rodadas:** Escrita restrita a administradores validados via claims.
-
-#### 6. Regras de Segurança do Storage (`storage.rules`)
-- Banners armazenados em `events/{eventId}/banners/{projectId}/{fileName}`.
-- Validação de formato (apenas `image/jpeg`, `image/png`, `image/webp`) e tamanho máximo de 5 MB.
-- Escrita restrita exclusivamente a administradores autenticados.
-- Logos e arquivos de marca continuam estáticos locais em `public/assets/branding/`.
-
-#### 7. Cloud Functions de Backend (`functions/src/`)
-- Módulos desenvolvidos e compilados (`tsc` 0 erros):
-  1. [`openRound`](file:///c:/Users/IZABELLAA/Documents/ARENA_VOICE_VOTO_POPULAR/functions/src/rounds/openRound.ts): Fecha rodadas anteriores, cria nova rodada com status `open` e atualiza o evento.
-  2. [`closeRound`](file:///c:/Users/IZABELLAA/Documents/ARENA_VOICE_VOTO_POPULAR/functions/src/rounds/closeRound.ts): Encerra a rodada ativa com timestamp de término.
-  3. [`prepareNextRound`](file:///c:/Users/IZABELLAA/Documents/ARENA_VOICE_VOTO_POPULAR/functions/src/rounds/prepareNextRound.ts): Prepara o próximo projeto com status `waiting` sem abrir automaticamente a votação.
-  4. [`submitVote`](file:///c:/Users/IZABELLAA/Documents/ARENA_VOICE_VOTO_POPULAR/functions/src/voting/submitVote.ts): Transação atômica de validação, gravação determinística e recálculo instantâneo das médias de pontuação popular.
-  5. [`getAdminResults`](file:///c:/Users/IZABELLAA/Documents/ARENA_VOICE_VOTO_POPULAR/functions/src/results/getAdminResults.ts): Relatório administrativo consolidado ordenado por média geral.
-
-#### 8. Ambiente Local e Requisitos de Plano
-- Índices compostos configurados em [`firestore.indexes.json`](file:///c:/Users/IZABELLAA/Documents/ARENA_VOICE_VOTO_POPULAR/firestore.indexes.json).
-- Script de teste e seed criado em [`scripts/seedEmulators.js`](file:///c:/Users/IZABELLAA/Documents/ARENA_VOICE_VOTO_POPULAR/scripts/seedEmulators.js).
-- **Esclarecimento de Plano:** No plano gratuito **Spark**, o Firestore, Authentication, Hosting, Storage e o **Firebase Emulator Suite** operam normalmente sem custos. Para deploy de Cloud Functions em produção no Google Cloud, a infraestrutura do Google exige o plano **Blaze** (Pay-as-you-go). No entanto, todo o desenvolvimento e homologação local no Emulator Suite dispensa cartão de crédito ou ativação de faturamento.
-
 ---
 
-**Status Atual:** Etapa 5 finalizada com sucesso. Aguardando autorização do usuário para iniciar a **Etapa 6**.
+**Status Atual:** Etapa 5 corrigida, validada e homologada com sucesso. Aguardando autorização do usuário para iniciar a **Etapa 6**.

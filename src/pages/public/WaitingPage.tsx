@@ -2,7 +2,7 @@ import React from 'react';
 import { motion } from 'framer-motion';
 import { ArenaLogo } from '@/components/branding';
 import { WaitingAnimation, ProgressIndicator, StatusMessage } from '@/components/ui';
-import { useVoting } from '@/contexts/VotingContext';
+import { useVoting } from '@/hooks/useVoting';
 import { RadioTower, AlertCircle } from 'lucide-react';
 
 export const WaitingPage: React.FC = () => {

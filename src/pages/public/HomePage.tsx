@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import { ArenaLogo } from '@/components/branding';
 import { VotingButton } from '@/components/voting';
-import { useVoting } from '@/contexts/VotingContext';
+import { useVoting } from '@/hooks/useVoting';
 import { Users, Star, TrendingUp, Play, Loader2 } from 'lucide-react';
 
 export const HomePage: React.FC = () => {

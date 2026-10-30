@@ -2,7 +2,7 @@ import React from 'react';
 import { motion } from 'framer-motion';
 import { ArenaLogo } from '@/components/branding';
 import { ProgressIndicator, StatusMessage } from '@/components/ui';
-import { useVoting } from '@/contexts/VotingContext';
+import { useVoting } from '@/hooks/useVoting';
 import { Check, ShieldCheck } from 'lucide-react';
 
 export const ConfirmationPage: React.FC = () => {

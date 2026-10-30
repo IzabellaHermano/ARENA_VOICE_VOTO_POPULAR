@@ -1,6 +1,6 @@
 import React from 'react';
 import { BrowserRouter } from 'react-router-dom';
-import { VotingProvider } from '@/contexts/VotingContext';
+import { VotingProvider } from '@/contexts/VotingProvider';
 import AppRoutes from '@/routes';
 
 export const App: React.FC = () => {

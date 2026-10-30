@@ -3,7 +3,7 @@ import { motion } from 'framer-motion';
 import { ArenaLogo } from '@/components/branding';
 import { ProjectBanner } from '@/components/ui';
 import { RatingSelector, VotingButton } from '@/components/voting';
-import { useVoting } from '@/contexts/VotingContext';
+import { useVoting } from '@/hooks/useVoting';
 import { Lightbulb, TrendingUp, Rocket, Send, AlertCircle } from 'lucide-react';
 
 export const EvaluationPage: React.FC = () => {
