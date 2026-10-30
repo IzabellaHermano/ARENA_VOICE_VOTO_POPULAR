@@ -1,125 +1,250 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Square, FastForward, BarChart2, Users, Clock } from 'lucide-react';
+import { Project, RoundStatus as RoundStatusType } from '@/types';
+import { AdminMockService } from '@/services/adminMockService';
+import {
+  RoundStatus,
+  RoundTimer,
+  VoteCounter,
+  AdminActionButton,
+} from '@/components/admin';
+import { Square, FastForward, BarChart2, RadioTower, Play, Layers } from 'lucide-react';
 
 export const AdminRoundPage: React.FC = () => {
   const navigate = useNavigate();
+
+  const [projects, setProjects] = useState<Project[]>([]);
+  const [currentProject, setCurrentProject] = useState<Project | null>(null);
+  const [roundStatus, setRoundStatus] = useState<RoundStatusType>('aberta');
   const [seconds, setSeconds] = useState(88); // 01:28
-  const [votesCount] = useState(142);
-  const [status, setStatus] = useState<'aberta' | 'encerrada'>('aberta');
+  const [votesCount, setVotesCount] = useState(142);
 
   useEffect(() => {
-    if (status !== 'aberta') return;
-    const interval = setInterval(() => {
+    const loadedProjects = AdminMockService.getProjects();
+    setProjects(loadedProjects);
+
+    const round = AdminMockService.getRound();
+    setRoundStatus(round.status);
+    if (round.totalVotos !== undefined) {
+      setVotesCount(round.totalVotos);
+    }
+
+    const proj = loadedProjects.find((p) => p.id === round.projetoAtualId) || loadedProjects[0];
+    setCurrentProject(proj || null);
+  }, []);
+
+  // Timer da rodada
+  useEffect(() => {
+    if (roundStatus !== 'aberta') return;
+
+    const timer = setInterval(() => {
       setSeconds((prev) => prev + 1);
     }, 1000);
-    return () => clearInterval(interval);
-  }, [status]);
 
-  const formatTime = (totalSeconds: number) => {
-    const mins = Math.floor(totalSeconds / 60);
-    const secs = totalSeconds % 60;
-    return `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
+    return () => clearInterval(timer);
+  }, [roundStatus]);
+
+  // Simulação discreta de votos chegando em tempo real enquanto a rodada estiver aberta
+  useEffect(() => {
+    if (roundStatus !== 'aberta') return;
+
+    const voteInterval = setInterval(() => {
+      setVotesCount((prev) => prev + Math.floor(Math.random() * 2));
+    }, 3500);
+
+    return () => clearInterval(voteInterval);
+  }, [roundStatus]);
+
+  // Ação 1: Encerrar Avaliação (Vermelho) ou Reabrir Avaliação
+  const handleToggleEncerrar = () => {
+    const newStatus: RoundStatusType = roundStatus === 'aberta' ? 'encerrada' : 'aberta';
+    setRoundStatus(newStatus);
+
+    const round = AdminMockService.getRound();
+    AdminMockService.saveRound({
+      ...round,
+      status: newStatus,
+      fim: newStatus === 'encerrada' ? new Date().toISOString() : undefined,
+      totalVotos: votesCount,
+    });
+  };
+
+  // Ação 2: Próximo Projeto (Azul) — NÃO deverá abrir automaticamente a próxima votação!
+  const handleNextProject = () => {
+    if (!projects.length || !currentProject) return;
+
+    const currentIndex = projects.findIndex((p) => p.id === currentProject.id);
+    const nextIndex = (currentIndex + 1) % projects.length;
+    const nextProj = projects[nextIndex];
+
+    setCurrentProject(nextProj);
+    // Conforme especificação: coloca o status em 'aguardando' sem abrir automaticamente a votação
+    setRoundStatus('aguardando');
+    setSeconds(0);
+    setVotesCount(0);
+
+    const round = AdminMockService.getRound();
+    AdminMockService.saveRound({
+      ...round,
+      projetoAtualId: nextProj.id,
+      status: 'aguardando',
+      inicio: undefined,
+      fim: undefined,
+      totalVotos: 0,
+    });
+  };
+
+  // Abrir Votação quando estiver em 'aguardando'
+  const handleOpenRound = () => {
+    setRoundStatus('aberta');
+    setSeconds(0);
+
+    const round = AdminMockService.getRound();
+    AdminMockService.saveRound({
+      ...round,
+      status: 'aberta',
+      inicio: new Date().toISOString(),
+      fim: undefined,
+    });
   };
 
   return (
-    <div className="space-y-6 max-w-5xl">
-      <div>
-        <h2 className="text-xl font-bold text-white">Controle da Rodada em Andamento</h2>
-        <p className="text-xs text-gray-400 mt-1">
-          Acompanhamento de métricas e status da votação em tempo real
-        </p>
+    <div className="space-y-6 max-w-6xl mx-auto">
+      {/* Header com Indicador de Conexão */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-arena-border/60 pb-5">
+        <div>
+          <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-arena-red/15 text-arena-red border border-arena-red/30 text-xs font-bold uppercase tracking-wider mb-2">
+            <RadioTower className="w-3.5 h-3.5 animate-pulse" />
+            <span>Transmissão ao Vivo</span>
+          </div>
+          <h2 className="text-2xl sm:text-3xl font-black text-white">
+            Controle da Rodada em Tempo Real
+          </h2>
+          <p className="text-xs sm:text-sm text-gray-400 mt-1">
+            Monitore o tempo decorrido, a contagem de votos e o status da votação sincronizada com o público.
+          </p>
+        </div>
+
+        <div className="flex items-center gap-2">
+          <RoundStatus status={roundStatus} />
+        </div>
       </div>
 
-      {/* Main Round Card & Stats */}
+      {/* Grid Principal: Projeto em Avaliação + Métricas */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* Project Being Evaluated */}
-        <div className="lg:col-span-2 bg-arena-card border border-arena-border rounded-2xl p-5 space-y-4">
-          <div className="flex items-center justify-between">
-            <span className="text-xs uppercase tracking-wider text-gray-400 font-semibold">
-              Projeto em avaliação no momento
-            </span>
-            <span
-              className={`px-3 py-1 rounded-full text-xs font-bold flex items-center gap-1.5 ${
-                status === 'aberta'
-                  ? 'bg-arena-green/20 text-arena-green border border-arena-green/40 shadow-green-glow'
-                  : 'bg-arena-red/20 text-arena-red border border-arena-red/40'
-              }`}
-            >
-              <span className="w-2 h-2 rounded-full bg-current animate-ping" />
-              {status === 'aberta' ? 'Votação aberta' : 'Votação encerrada'}
-            </span>
-          </div>
+        {/* Card do Projeto em Avaliação no Momento */}
+        <div className="lg:col-span-2 bg-arena-card border border-arena-border rounded-3xl p-6 flex flex-col justify-between shadow-xl relative overflow-hidden">
+          <div>
+            <div className="flex items-center justify-between border-b border-arena-border/60 pb-3 mb-4">
+              <span className="text-xs font-extrabold uppercase tracking-wider text-gray-400">
+                Projeto em avaliação no momento
+              </span>
+              <span className="text-xs font-mono font-bold text-arena-gold">
+                Ordem #{currentProject?.ordem || 1}
+              </span>
+            </div>
 
-          <div className="h-40 bg-gradient-to-r from-gray-800 to-gray-700 rounded-xl flex items-center justify-center text-sm font-semibold text-gray-300 uppercase tracking-widest border border-arena-border">
-            Banner do Projeto
-          </div>
+            {/* Banner do Projeto */}
+            <div className="relative h-44 sm:h-52 rounded-2xl bg-gradient-to-br from-[#0c182d] via-[#101c30] to-[#070e1a] border border-arena-border flex items-center justify-center overflow-hidden mb-4 shadow-inner">
+              {currentProject?.bannerUrl ? (
+                <img
+                  src={currentProject.bannerUrl}
+                  alt={currentProject.nome}
+                  className="w-full h-full object-cover"
+                />
+              ) : (
+                <div className="flex flex-col items-center justify-center text-gray-400 gap-2">
+                  <div className="w-12 h-12 rounded-2xl bg-white/5 border border-white/10 flex items-center justify-center text-arena-blue shadow-blue-glow">
+                    <Layers className="w-6 h-6" />
+                  </div>
+                  <span className="text-xs font-bold uppercase tracking-widest text-gray-300">
+                    Banner do Projeto
+                  </span>
+                </div>
+              )}
+            </div>
 
-          <div className="text-center py-1">
-            <h3 className="text-2xl font-black text-white">Projeto 01</h3>
-            <p className="text-xs text-gray-400">Plataforma Inteligente de Gestão e Mobilidade</p>
+            {/* Nome e Categoria */}
+            <div className="text-center sm:text-left space-y-1">
+              <h3 className="text-2xl sm:text-3xl font-black text-white">
+                {currentProject?.nome || 'Nenhum projeto ativo'}
+              </h3>
+              {currentProject?.categoria && (
+                <p className="text-sm font-semibold text-arena-gold">
+                  {currentProject.categoria}
+                </p>
+              )}
+              <p className="text-xs text-gray-400 line-clamp-2 mt-1">
+                {currentProject?.descricao || 'Sem descrição cadastrada.'}
+              </p>
+            </div>
           </div>
         </div>
 
-        {/* Real-time Metrics */}
-        <div className="space-y-4 flex flex-col justify-between">
-          {/* Votos Recebidos */}
-          <div className="bg-arena-card border border-arena-border rounded-xl p-5 flex items-center gap-4">
-            <div className="w-12 h-12 rounded-xl bg-arena-blue/20 border border-arena-blue/40 flex items-center justify-center text-arena-blue shadow-blue-glow">
-              <Users className="w-6 h-6" />
-            </div>
-            <div>
-              <div className="text-xs text-gray-400 font-medium">Participação do público</div>
-              <div className="text-3xl font-black text-white">{votesCount}</div>
-              <div className="text-[10px] text-arena-green">votos recebidos</div>
-            </div>
-          </div>
+        {/* Métricas em Tempo Real: Participação e Cronômetro */}
+        <div className="flex flex-col justify-between gap-5">
+          <VoteCounter count={votesCount} />
+          <RoundTimer seconds={seconds} isActive={roundStatus === 'aberta'} />
 
-          {/* Tempo Decorrido */}
-          <div className="bg-arena-card border border-arena-border rounded-xl p-5 flex items-center gap-4">
-            <div className="w-12 h-12 rounded-xl bg-arena-gold/20 border border-arena-gold/40 flex items-center justify-center text-arena-gold shadow-gold-glow">
-              <Clock className="w-6 h-6" />
+          {/* Quick Info Box */}
+          <div className="bg-arena-card/80 border border-arena-border rounded-2xl p-4 text-xs text-gray-400 space-y-2">
+            <div className="font-bold text-gray-300 uppercase tracking-wider text-[10px]">
+              Regra de Operação:
             </div>
-            <div>
-              <div className="text-xs text-gray-400 font-medium">Tempo da rodada</div>
-              <div className="text-3xl font-black font-mono text-white">
-                {formatTime(seconds)}
-              </div>
-              <div className="text-[10px] text-gray-400">tempo decorrido</div>
-            </div>
+            <p className="leading-relaxed">
+              O botão <span className="text-arena-blue font-bold">Próximo Projeto</span> avança o projeto e define o estado como <span className="text-arena-gold font-bold">Aguardando liberação</span>. O operador tem total controle para liberar a votação quando o apresentador autorizar.
+            </p>
           </div>
         </div>
       </div>
 
-      {/* Control Actions */}
-      <div className="pt-4 flex flex-wrap items-center gap-3 border-t border-arena-border/60">
-        <button
-          onClick={() => setStatus(status === 'aberta' ? 'encerrada' : 'aberta')}
-          className="flex-1 sm:flex-initial bg-arena-red hover:bg-arena-redHover text-white font-bold px-6 py-3 rounded-xl shadow-red-glow flex items-center justify-center gap-2 transition-all"
-        >
-          <Square className="w-4 h-4 fill-current" />
-          <span>{status === 'aberta' ? 'ENCERRAR AVALIAÇÃO' : 'REABRIR AVALIAÇÃO'}</span>
-        </button>
+      {/* Barra de Ações: Botões de Controle */}
+      <div className="bg-arena-card border border-arena-border rounded-2xl p-5 flex flex-wrap items-center justify-between gap-4 shadow-xl">
+        <div className="flex flex-wrap items-center gap-3 w-full sm:w-auto">
+          {/* Se a rodada estiver em 'aguardando', exibe botão para liberar */}
+          {roundStatus === 'aguardando' && (
+            <AdminActionButton
+              onClick={handleOpenRound}
+              variant="gold"
+              icon={<Play className="w-4 h-4 fill-current" />}
+            >
+              LIBERAR AVALIAÇÃO
+            </AdminActionButton>
+          )}
 
-        <button
-          onClick={() => navigate('/admin/projetos')}
-          className="flex-1 sm:flex-initial bg-arena-blue hover:bg-blue-600 text-white font-bold px-6 py-3 rounded-xl shadow-blue-glow flex items-center justify-center gap-2 transition-all"
-        >
-          <FastForward className="w-4 h-4 fill-current" />
-          <span>PRÓXIMO PROJETO</span>
-        </button>
+          {/* Botão Vermelho: Encerrar Avaliação */}
+          {roundStatus !== 'aguardando' && (
+            <AdminActionButton
+              onClick={handleToggleEncerrar}
+              variant="danger"
+              icon={<Square className="w-4 h-4 fill-current" />}
+            >
+              {roundStatus === 'aberta' ? 'ENCERRAR AVALIAÇÃO' : 'REABRIR AVALIAÇÃO'}
+            </AdminActionButton>
+          )}
 
-        <button
+          {/* Botão Azul: Próximo Projeto (não abre automaticamente a próxima votação) */}
+          <AdminActionButton
+            onClick={handleNextProject}
+            variant="primary"
+            icon={<FastForward className="w-4 h-4 fill-current" />}
+          >
+            PRÓXIMO PROJETO
+          </AdminActionButton>
+        </div>
+
+        {/* Botão Secundário: Gerar Dashboard */}
+        <AdminActionButton
           onClick={() => navigate('/admin/resultados')}
-          className="w-full sm:w-auto ml-auto bg-arena-card hover:bg-white/10 text-gray-300 hover:text-white border border-arena-border font-semibold px-5 py-3 rounded-xl flex items-center justify-center gap-2 transition-all"
+          variant="secondary"
+          icon={<BarChart2 className="w-4 h-4 text-arena-gold" />}
+          className="w-full sm:w-auto ml-auto"
         >
-          <BarChart2 className="w-4 h-4 text-arena-gold" />
-          <span>GERAR DASHBOARD</span>
-        </button>
+          GERAR DASHBOARD
+        </AdminActionButton>
       </div>
     </div>
   );
 };
 
 export default AdminRoundPage;
-

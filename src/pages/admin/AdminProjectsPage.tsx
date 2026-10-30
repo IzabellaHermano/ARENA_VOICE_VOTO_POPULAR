@@ -1,87 +1,165 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Play, CheckCircle2, Circle } from 'lucide-react';
+import { Project } from '@/types';
+import { AdminMockService } from '@/services/adminMockService';
+import { ProjectCard, ProjectForm, AdminActionButton } from '@/components/admin';
+import { Play, Plus, Sparkles } from 'lucide-react';
 
 export const AdminProjectsPage: React.FC = () => {
   const navigate = useNavigate();
-  const [selectedProject, setSelectedProject] = useState('projeto01');
 
-  const projects = [
-    { id: 'projeto01', name: 'Projeto 01', banner: 'Banner do Projeto' },
-    { id: 'projeto02', name: 'Projeto 02', banner: 'Banner do Projeto' },
-    { id: 'projeto03', name: 'Projeto 03', banner: 'Banner do Projeto' },
-    { id: 'projeto04', name: 'Projeto 04', banner: 'Banner do Projeto' },
-  ];
+  const [projects, setProjects] = useState<Project[]>([]);
+  const [selectedProjectId, setSelectedProjectId] = useState<string>('projeto01');
+  const [isModalOpen, setIsModalOpen] = useState(false);
+  const [editingProject, setEditingProject] = useState<Project | null>(null);
+
+  useEffect(() => {
+    const loaded = AdminMockService.getProjects();
+    setProjects(loaded);
+
+    const round = AdminMockService.getRound();
+    if (round.projetoAtualId) {
+      setSelectedProjectId(round.projetoAtualId);
+    }
+  }, []);
+
+  const handleSelectProject = (project: Project) => {
+    setSelectedProjectId(project.id);
+  };
+
+  const handleOpenCreateModal = () => {
+    setEditingProject(null);
+    setIsModalOpen(true);
+  };
+
+  const handleOpenEditModal = (project: Project) => {
+    setEditingProject(project);
+    setIsModalOpen(true);
+  };
+
+  const handleToggleActive = (project: Project) => {
+    const updated = projects.map((p) =>
+      p.id === project.id ? { ...p, ativo: !p.ativo } : p
+    );
+    setProjects(updated);
+    AdminMockService.saveProjects(updated);
+  };
+
+  const handleSaveProject = (data: Partial<Project>) => {
+    let updated: Project[];
+    if (editingProject) {
+      updated = projects.map((p) =>
+        p.id === editingProject.id ? ({ ...p, ...data } as Project) : p
+      );
+    } else {
+      updated = [...projects, data as Project];
+    }
+
+    // Ordenar por número de ordem
+    updated.sort((a, b) => a.ordem - b.ordem);
+
+    setProjects(updated);
+    AdminMockService.saveProjects(updated);
+  };
 
   const handleLiberarVotacao = () => {
+    const currentRound = AdminMockService.getRound();
+    const updatedRound = {
+      ...currentRound,
+      projetoAtualId: selectedProjectId,
+      status: 'aberta' as const,
+      inicio: new Date().toISOString(),
+      fim: undefined,
+    };
+    AdminMockService.saveRound(updatedRound);
+
     navigate('/admin/rodada');
   };
 
+  const selectedProject = projects.find((p) => p.id === selectedProjectId);
+
   return (
-    <div className="space-y-6 max-w-5xl">
-      <div>
-        <h2 className="text-xl font-bold text-white">Selecione o projeto para avaliação</h2>
-        <p className="text-xs text-gray-400 mt-1">
-          O projeto selecionado será exibido instantaneamente em todas as telas do público via Firestore
-        </p>
-      </div>
-
-      {/* Grid de Projetos */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        {projects.map((proj) => {
-          const isSelected = selectedProject === proj.id;
-          return (
-            <div
-              key={proj.id}
-              onClick={() => setSelectedProject(proj.id)}
-              className={`cursor-pointer rounded-xl border p-3 flex flex-col justify-between transition-all ${
-                isSelected
-                  ? 'border-arena-red bg-arena-card shadow-red-glow'
-                  : 'border-arena-border bg-arena-card/60 hover:border-gray-500'
-              }`}
-            >
-              <div className="h-28 bg-gradient-to-br from-gray-800 to-gray-700 rounded-lg flex items-center justify-center text-xs font-semibold uppercase text-gray-400">
-                {proj.banner}
-              </div>
-
-              <div className="pt-3 pb-1 flex items-center justify-between">
-                <div>
-                  <h4 className="font-bold text-sm text-white">{proj.name}</h4>
-                  <span className="text-[11px] text-gray-400">
-                    {isSelected ? 'Selecionado' : 'Disponível'}
-                  </span>
-                </div>
-
-                <div>
-                  {isSelected ? (
-                    <CheckCircle2 className="w-5 h-5 text-arena-red fill-arena-red/20" />
-                  ) : (
-                    <Circle className="w-5 h-5 text-gray-500" />
-                  )}
-                </div>
-              </div>
-            </div>
-          );
-        })}
-      </div>
-
-      {/* Action Bar */}
-      <div className="pt-4 flex flex-col sm:flex-row items-center justify-between gap-4 border-t border-arena-border/60">
-        <div className="text-xs text-gray-400">
-          Status atual: <span className="font-semibold text-arena-gold">Aguardando liberação</span>
+    <div className="space-y-6 max-w-7xl mx-auto">
+      {/* Top Header & Toolbar */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-arena-border/60 pb-5">
+        <div>
+          <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-arena-blue/15 text-arena-blue border border-arena-blue/30 text-xs font-bold uppercase tracking-wider mb-2">
+            <Sparkles className="w-3.5 h-3.5" />
+            <span>Gestão dos Participantes</span>
+          </div>
+          <h2 className="text-2xl sm:text-3xl font-black text-white">
+            Selecione o projeto que será avaliado
+          </h2>
+          <p className="text-xs sm:text-sm text-gray-400 mt-1">
+            Escolha o projeto ativo no palco e prepare a abertura da rodada para os celulares do público.
+          </p>
         </div>
 
-        <button
-          onClick={handleLiberarVotacao}
-          className="w-full sm:w-auto bg-arena-gold hover:bg-arena-goldLight text-black font-extrabold px-8 py-3 rounded-xl shadow-gold-glow flex items-center justify-center gap-2 transition-all transform active:scale-95"
-        >
-          <Play className="w-5 h-5 fill-current" />
-          <span>LIBERAR PROJETO PARA VOTAÇÃO</span>
-        </button>
+        <div>
+          <AdminActionButton
+            onClick={handleOpenCreateModal}
+            variant="secondary"
+            icon={<Plus className="w-4 h-4 text-arena-gold" />}
+          >
+            Cadastrar Projeto
+          </AdminActionButton>
+        </div>
       </div>
+
+      {/* Grid de Cards dos Projetos */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5">
+        {projects.map((project) => (
+          <ProjectCard
+            key={project.id}
+            project={project}
+            isSelected={selectedProjectId === project.id}
+            onSelect={handleSelectProject}
+            onEdit={handleOpenEditModal}
+            onToggleActive={handleToggleActive}
+          />
+        ))}
+      </div>
+
+      {/* Barra de Ação Inferior — Botão Amarelo LIBERAR VOTAÇÃO */}
+      <div className="bg-arena-card border border-arena-border rounded-2xl p-5 sm:p-6 flex flex-col sm:flex-row items-center justify-between gap-4 shadow-xl">
+        <div className="text-center sm:text-left">
+          <div className="text-xs text-gray-400 font-semibold uppercase tracking-wider">
+            Projeto selecionado para avaliação:
+          </div>
+          <div className="text-lg font-black text-white mt-0.5 flex items-center gap-2 justify-center sm:justify-start">
+            <span className="w-2.5 h-2.5 rounded-full bg-arena-red animate-ping" />
+            <span>{selectedProject?.nome || 'Nenhum selecionado'}</span>
+            {selectedProject?.categoria && (
+              <span className="text-xs text-arena-gold font-bold">
+                • {selectedProject.categoria}
+              </span>
+            )}
+          </div>
+          <div className="text-[11px] text-gray-400 mt-0.5">
+            Ao liberar, os dispositivos do público carregarão instantaneamente este projeto para votação.
+          </div>
+        </div>
+
+        <AdminActionButton
+          onClick={handleLiberarVotacao}
+          variant="gold"
+          icon={<Play className="w-5 h-5 fill-current" />}
+          className="w-full sm:w-auto py-3.5 px-8 text-sm"
+        >
+          LIBERAR VOTAÇÃO
+        </AdminActionButton>
+      </div>
+
+      {/* Modal de Cadastro / Edição */}
+      <ProjectForm
+        isOpen={isModalOpen}
+        projectToEdit={editingProject}
+        totalProjects={projects.length}
+        onClose={() => setIsModalOpen(false)}
+        onSave={handleSaveProject}
+      />
     </div>
   );
 };
 
 export default AdminProjectsPage;
-

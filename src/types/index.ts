@@ -6,10 +6,11 @@
 export interface Project {
   id: string;
   nome: string;
+  descricao?: string;
   bannerUrl?: string;
   ordem: number;
   ativo: boolean;
-  descricao?: string;
+  categoria?: string;
 }
 
 export interface Vote {
@@ -44,3 +45,22 @@ export interface ProjectResult {
   totalVotos: number;
 }
 
+export interface EventConfig {
+  id?: string;
+  nomeEvento: string;
+  subtitulo?: string;
+  statusEvento: 'planejado' | 'em_andamento' | 'pausado' | 'encerrado';
+  ordemProjetos: string[]; // IDs ordenados dos projetos
+  exibirTelaoTempoReal: boolean;
+  tempoPadraoRodadaSegundos: number; // ex: 90
+  pesoVotoPopularPercentual: number; // 20%
+}
+
+export interface AdminUser {
+  uid: string;
+  email: string;
+  nome: string;
+  role: 'superadmin' | 'admin' | 'operador';
+  ativo: boolean;
+  ultimoAcesso?: string;
+}
