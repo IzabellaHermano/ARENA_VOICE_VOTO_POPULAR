@@ -3,13 +3,23 @@ import { useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import { ArenaLogo } from '@/components/branding';
 import { VotingButton } from '@/components/voting';
-import { Users, Star, TrendingUp, Play } from 'lucide-react';
+import { useVoting } from '@/contexts/VotingContext';
+import { Users, Star, TrendingUp, Play, Loader2 } from 'lucide-react';
 
 export const HomePage: React.FC = () => {
   const navigate = useNavigate();
+  const { currentRound, hasVotedCurrentProject, isLoading } = useVoting();
 
   const handleStartVoting = () => {
-    navigate('/aguardando');
+    if (currentRound?.status === 'open') {
+      if (hasVotedCurrentProject) {
+        navigate('/confirmacao');
+      } else {
+        navigate('/avaliar');
+      }
+    } else {
+      navigate('/aguardando');
+    }
   };
 
   return (
@@ -96,7 +106,8 @@ export const HomePage: React.FC = () => {
         <VotingButton
           variant="primary"
           onClick={handleStartVoting}
-          icon={<Play className="w-5 h-5 fill-current" />}
+          isLoading={isLoading}
+          icon={isLoading ? <Loader2 className="w-5 h-5 animate-spin" /> : <Play className="w-5 h-5 fill-current" />}
           className="shadow-red-glow-lg text-sm sm:text-base py-4"
         >
           ENTRAR PARA VOTAR

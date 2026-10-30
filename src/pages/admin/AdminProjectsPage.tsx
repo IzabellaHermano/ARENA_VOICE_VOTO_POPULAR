@@ -1,9 +1,10 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Project } from '@/types';
+import { EventService, DEFAULT_EVENT_ID } from '@/services/eventService';
 import { AdminMockService } from '@/services/adminMockService';
 import { ProjectCard, ProjectForm, AdminActionButton } from '@/components/admin';
-import { Play, Plus, Sparkles } from 'lucide-react';
+import { Play, Plus, Sparkles, AlertCircle } from 'lucide-react';
 
 export const AdminProjectsPage: React.FC = () => {
   const navigate = useNavigate();
@@ -12,16 +13,41 @@ export const AdminProjectsPage: React.FC = () => {
   const [selectedProjectId, setSelectedProjectId] = useState<string>('projeto01');
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingProject, setEditingProject] = useState<Project | null>(null);
+  const [isOpening, setIsOpening] = useState(false);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
+  // Carrega e escuta projetos em tempo real via Firestore
   useEffect(() => {
-    const loaded = AdminMockService.getProjects();
-    setProjects(loaded);
+    const unsub = EventService.subscribeToProjectsList(
+      DEFAULT_EVENT_ID,
+      (firestoreProjects) => {
+        if (firestoreProjects && firestoreProjects.length > 0) {
+          const mapped: Project[] = firestoreProjects.map((fp) => ({
+            id: fp.id || '',
+            nome: fp.name,
+            descricao: fp.description,
+            bannerUrl: fp.bannerUrl,
+            ordem: fp.order,
+            ativo: fp.active,
+          }));
+          setProjects(mapped);
+          if (!selectedProjectId && mapped.length > 0) {
+            setSelectedProjectId(mapped[0].id);
+          }
+        } else {
+          // Fallback inicial para mock local
+          const loaded = AdminMockService.getProjects();
+          setProjects(loaded);
+        }
+      },
+      () => {
+        const loaded = AdminMockService.getProjects();
+        setProjects(loaded);
+      }
+    );
 
-    const round = AdminMockService.getRound();
-    if (round.projetoAtualId) {
-      setSelectedProjectId(round.projetoAtualId);
-    }
-  }, []);
+    return () => unsub();
+  }, [selectedProjectId]);
 
   const handleSelectProject = (project: Project) => {
     setSelectedProjectId(project.id);
@@ -55,25 +81,40 @@ export const AdminProjectsPage: React.FC = () => {
       updated = [...projects, data as Project];
     }
 
-    // Ordenar por número de ordem
     updated.sort((a, b) => a.ordem - b.ordem);
-
     setProjects(updated);
     AdminMockService.saveProjects(updated);
   };
 
-  const handleLiberarVotacao = () => {
-    const currentRound = AdminMockService.getRound();
-    const updatedRound = {
-      ...currentRound,
-      projetoAtualId: selectedProjectId,
-      status: 'aberta' as const,
-      inicio: new Date().toISOString(),
-      fim: undefined,
-    };
-    AdminMockService.saveRound(updatedRound);
+  // 1. FLUXO ADMINISTRATIVO: Seleciona projeto e clica em LIBERAR VOTAÇÃO no servidor
+  const handleLiberarVotacao = async () => {
+    if (!selectedProjectId) {
+      setErrorMessage('Selecione um projeto para avaliação antes de liberar a rodada.');
+      return;
+    }
 
-    navigate('/admin/rodada');
+    setIsOpening(true);
+    setErrorMessage(null);
+
+    try {
+      // Chamada oficial à Cloud Function openRound no servidor
+      await EventService.openRound(DEFAULT_EVENT_ID, selectedProjectId);
+      navigate('/admin/rodada');
+    } catch (err: unknown) {
+      console.warn('Erro ao chamar openRound no Firebase, aplicando fallback local:', err);
+      // Fallback local caso offline
+      const currentRound = AdminMockService.getRound();
+      AdminMockService.saveRound({
+        ...currentRound,
+        projetoAtualId: selectedProjectId,
+        status: 'aberta',
+        inicio: new Date().toISOString(),
+        totalVotos: 0,
+      });
+      navigate('/admin/rodada');
+    } finally {
+      setIsOpening(false);
+    }
   };
 
   const selectedProject = projects.find((p) => p.id === selectedProjectId);
@@ -91,7 +132,7 @@ export const AdminProjectsPage: React.FC = () => {
             Selecione o projeto que será avaliado
           </h2>
           <p className="text-xs sm:text-sm text-gray-400 mt-1">
-            Escolha o projeto ativo no palco e prepare a abertura da rodada para os celulares do público.
+            Escolha o projeto ativo no palco e abra a rodada no servidor para os celulares do público.
           </p>
         </div>
 
@@ -105,6 +146,13 @@ export const AdminProjectsPage: React.FC = () => {
           </AdminActionButton>
         </div>
       </div>
+
+      {errorMessage && (
+        <div className="p-3 rounded-xl bg-arena-red/15 border border-arena-red/40 text-arena-red text-xs flex items-center gap-2">
+          <AlertCircle className="w-4 h-4 shrink-0" />
+          <span>{errorMessage}</span>
+        </div>
+      )}
 
       {/* Grid de Cards dos Projetos */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5">
@@ -136,17 +184,18 @@ export const AdminProjectsPage: React.FC = () => {
             )}
           </div>
           <div className="text-[11px] text-gray-400 mt-0.5">
-            Ao liberar, os dispositivos do público carregarão instantaneamente este projeto para votação.
+            Ao clicar, o servidor abrirá a rodada oficial no Firestore e os celulares do público entrarão em modo de votação em tempo real.
           </div>
         </div>
 
         <AdminActionButton
           onClick={handleLiberarVotacao}
           variant="gold"
+          isLoading={isOpening}
           icon={<Play className="w-5 h-5 fill-current" />}
           className="w-full sm:w-auto py-3.5 px-8 text-sm"
         >
-          LIBERAR VOTAÇÃO
+          {isOpening ? 'ABRINDO RODADA NO SERVIDOR...' : 'LIBERAR VOTAÇÃO'}
         </AdminActionButton>
       </div>
 

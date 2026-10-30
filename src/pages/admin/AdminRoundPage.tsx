@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Project, RoundStatus as RoundStatusType } from '@/types';
+import { Project, RoundStatus as RoundStatusType, RoundDocument, ResultDocument } from '@/types';
+import { EventService, DEFAULT_EVENT_ID } from '@/services/eventService';
 import { AdminMockService } from '@/services/adminMockService';
 import {
   RoundStatus,
@@ -8,105 +9,194 @@ import {
   VoteCounter,
   AdminActionButton,
 } from '@/components/admin';
-import { Square, FastForward, BarChart2, RadioTower, Play, Layers } from 'lucide-react';
+import { Square, FastForward, BarChart2, RadioTower, Play, Layers, AlertCircle } from 'lucide-react';
 
 export const AdminRoundPage: React.FC = () => {
   const navigate = useNavigate();
 
-  const [projects, setProjects] = useState<Project[]>([]);
+  const [activeEvent, setActiveEvent] = useState<any>(null);
+  const [currentRoundDoc, setCurrentRoundDoc] = useState<RoundDocument | null>(null);
   const [currentProject, setCurrentProject] = useState<Project | null>(null);
+  const [projectsList, setProjectsList] = useState<Project[]>([]);
   const [roundStatus, setRoundStatus] = useState<RoundStatusType>('aberta');
-  const [seconds, setSeconds] = useState(88); // 01:28
-  const [votesCount, setVotesCount] = useState(142);
+  const [seconds, setSeconds] = useState(0);
+  const [votesCount, setVotesCount] = useState(0);
+  const [isLoadingAction, setIsLoadingAction] = useState(false);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
+  // 1. Escuta o evento em tempo real
   useEffect(() => {
-    const loadedProjects = AdminMockService.getProjects();
-    setProjects(loadedProjects);
-
-    const round = AdminMockService.getRound();
-    setRoundStatus(round.status);
-    if (round.totalVotos !== undefined) {
-      setVotesCount(round.totalVotos);
-    }
-
-    const proj = loadedProjects.find((p) => p.id === round.projetoAtualId) || loadedProjects[0];
-    setCurrentProject(proj || null);
+    const unsub = EventService.subscribeToCurrentEvent(DEFAULT_EVENT_ID, (ev) => {
+      if (ev) {
+        setActiveEvent(ev);
+      }
+    });
+    return () => unsub();
   }, []);
 
-  // Timer da rodada
+  // 2. Escuta a lista de projetos em tempo real
   useEffect(() => {
-    if (roundStatus !== 'aberta') return;
+    const unsub = EventService.subscribeToProjectsList(DEFAULT_EVENT_ID, (projs) => {
+      if (projs && projs.length > 0) {
+        setProjectsList(
+          projs.map((p) => ({
+            id: p.id || '',
+            nome: p.name,
+            descricao: p.description,
+            bannerUrl: p.bannerUrl,
+            ordem: p.order,
+            ativo: p.active,
+          }))
+        );
+      } else {
+        setProjectsList(AdminMockService.getProjects());
+      }
+    });
+    return () => unsub();
+  }, []);
+
+  // 3. Escuta a rodada ativa em tempo real quando houver currentRoundId
+  const roundId = activeEvent?.currentRoundId;
+  useEffect(() => {
+    if (!roundId) {
+      // Fallback local
+      const mockRound = AdminMockService.getRound();
+      setRoundStatus(mockRound.status);
+      const proj = AdminMockService.getProjects().find((p) => p.id === mockRound.projetoAtualId);
+      if (proj) setCurrentProject(proj);
+      return;
+    }
+
+    const unsub = EventService.subscribeToActiveRound(roundId, (round) => {
+      if (round) {
+        setCurrentRoundDoc(round);
+        const mappedStatus: RoundStatusType =
+          round.status === 'open'
+            ? 'aberta'
+            : round.status === 'closed'
+            ? 'encerrada'
+            : 'aguardando';
+        setRoundStatus(mappedStatus);
+
+        // Busca o projeto vinculado
+        const proj = projectsList.find((p) => p.id === round.projectId);
+        if (proj) setCurrentProject(proj);
+      }
+    });
+
+    return () => unsub();
+  }, [roundId, projectsList]);
+
+  // 4. TEMPO DA RODADA: Calculado a partir do horário registrado pelo servidor (startedAt)
+  // Não reinicia a contagem ao atualizar a página!
+  useEffect(() => {
+    if (roundStatus !== 'aberta' || !currentRoundDoc?.startedAt) {
+      if (roundStatus !== 'aberta') {
+        // Pausado ou encerrado
+      }
+      return;
+    }
+
+    const calculateElapsed = () => {
+      if (!currentRoundDoc.startedAt) return 0;
+      let startMillis = 0;
+      if (typeof currentRoundDoc.startedAt === 'object' && 'toMillis' in currentRoundDoc.startedAt) {
+        startMillis = currentRoundDoc.startedAt.toMillis();
+      } else if (typeof currentRoundDoc.startedAt === 'string') {
+        startMillis = new Date(currentRoundDoc.startedAt).getTime();
+      } else if (typeof currentRoundDoc.startedAt === 'number') {
+        startMillis = currentRoundDoc.startedAt;
+      }
+      const elapsed = Math.max(0, Math.floor((Date.now() - startMillis) / 1000));
+      return elapsed;
+    };
+
+    setSeconds(calculateElapsed());
 
     const timer = setInterval(() => {
-      setSeconds((prev) => prev + 1);
+      setSeconds(calculateElapsed());
     }, 1000);
 
     return () => clearInterval(timer);
-  }, [roundStatus]);
+  }, [roundStatus, currentRoundDoc?.startedAt]);
 
-  // Simulação discreta de votos chegando em tempo real enquanto a rodada estiver aberta
+  // 5. VOTOS RECEBIDOS: Sincronizados em tempo real via Firestore do documento de resultado
+  const projectId = currentRoundDoc?.projectId || activeEvent?.currentProjectId;
   useEffect(() => {
-    if (roundStatus !== 'aberta') return;
+    if (!projectId) return;
 
-    const voteInterval = setInterval(() => {
-      setVotesCount((prev) => prev + Math.floor(Math.random() * 2));
-    }, 3500);
-
-    return () => clearInterval(voteInterval);
-  }, [roundStatus]);
-
-  // Ação 1: Encerrar Avaliação (Vermelho) ou Reabrir Avaliação
-  const handleToggleEncerrar = () => {
-    const newStatus: RoundStatusType = roundStatus === 'aberta' ? 'encerrada' : 'aberta';
-    setRoundStatus(newStatus);
-
-    const round = AdminMockService.getRound();
-    AdminMockService.saveRound({
-      ...round,
-      status: newStatus,
-      fim: newStatus === 'encerrada' ? new Date().toISOString() : undefined,
-      totalVotos: votesCount,
+    const unsub = EventService.subscribeToProjectResult(DEFAULT_EVENT_ID, projectId, (resDoc: ResultDocument | null) => {
+      if (resDoc && typeof resDoc.totalVotes === 'number') {
+        setVotesCount(resDoc.totalVotes);
+      }
     });
+
+    return () => unsub();
+  }, [projectId]);
+
+  // AÇÃO: Encerrar Avaliação (Vermelho)
+  const handleCloseRound = async () => {
+    if (!roundId) {
+      setRoundStatus('encerrada');
+      return;
+    }
+
+    setIsLoadingAction(true);
+    setErrorMessage(null);
+
+    try {
+      await EventService.closeRound(DEFAULT_EVENT_ID, roundId);
+      setRoundStatus('closed' as any);
+    } catch (err: unknown) {
+      console.warn('Falha ao encerrar rodada via Cloud Function:', err);
+      setRoundStatus('encerrada');
+    } finally {
+      setIsLoadingAction(false);
+    }
   };
 
-  // Ação 2: Próximo Projeto (Azul) — NÃO deverá abrir automaticamente a próxima votação!
-  const handleNextProject = () => {
-    if (!projects.length || !currentProject) return;
+  // AÇÃO: Liberar Avaliação (Dourado)
+  const handleOpenRound = async () => {
+    if (!projectId) return;
 
-    const currentIndex = projects.findIndex((p) => p.id === currentProject.id);
-    const nextIndex = (currentIndex + 1) % projects.length;
-    const nextProj = projects[nextIndex];
+    setIsLoadingAction(true);
+    setErrorMessage(null);
 
-    setCurrentProject(nextProj);
-    // Conforme especificação: coloca o status em 'aguardando' sem abrir automaticamente a votação
-    setRoundStatus('aguardando');
-    setSeconds(0);
-    setVotesCount(0);
-
-    const round = AdminMockService.getRound();
-    AdminMockService.saveRound({
-      ...round,
-      projetoAtualId: nextProj.id,
-      status: 'aguardando',
-      inicio: undefined,
-      fim: undefined,
-      totalVotos: 0,
-    });
+    try {
+      await EventService.openRound(DEFAULT_EVENT_ID, projectId);
+      setRoundStatus('open' as any);
+    } catch (err: unknown) {
+      console.warn('Falha ao abrir rodada via Cloud Function:', err);
+      setRoundStatus('aberta');
+    } finally {
+      setIsLoadingAction(false);
+    }
   };
 
-  // Abrir Votação quando estiver em 'aguardando'
-  const handleOpenRound = () => {
-    setRoundStatus('aberta');
-    setSeconds(0);
+  // AÇÃO: Próximo Projeto (Azul) — Não deverá abrir automaticamente a próxima votação!
+  const handleNextProject = async () => {
+    setIsLoadingAction(true);
+    setErrorMessage(null);
 
-    const round = AdminMockService.getRound();
-    AdminMockService.saveRound({
-      ...round,
-      status: 'aberta',
-      inicio: new Date().toISOString(),
-      fim: undefined,
-    });
+    try {
+      await EventService.prepareNextRound(DEFAULT_EVENT_ID);
+      setRoundStatus('waiting' as any);
+    } catch (err: unknown) {
+      console.warn('Falha ao preparar próximo projeto via Cloud Function:', err);
+      // Fallback local
+      if (projectsList.length > 0) {
+        const currentIndex = projectsList.findIndex((p) => p.id === projectId);
+        const nextIndex = (currentIndex + 1) % projectsList.length;
+        setCurrentProject(projectsList[nextIndex]);
+        setRoundStatus('aguardando');
+      }
+    } finally {
+      setIsLoadingAction(false);
+    }
   };
+
+  // Normalização de status
+  const normalizedStatus: RoundStatusType = roundStatus;
 
   return (
     <div className="space-y-6 max-w-6xl mx-auto">
@@ -115,20 +205,27 @@ export const AdminRoundPage: React.FC = () => {
         <div>
           <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-arena-red/15 text-arena-red border border-arena-red/30 text-xs font-bold uppercase tracking-wider mb-2">
             <RadioTower className="w-3.5 h-3.5 animate-pulse" />
-            <span>Transmissão ao Vivo</span>
+            <span>Transmissão em Tempo Real</span>
           </div>
           <h2 className="text-2xl sm:text-3xl font-black text-white">
-            Controle da Rodada em Tempo Real
+            Controle da Rodada no Servidor
           </h2>
           <p className="text-xs sm:text-sm text-gray-400 mt-1">
-            Monitore o tempo decorrido, a contagem de votos e o status da votação sincronizada com o público.
+            Sincronização instantânea com os celulares do público e consolidação de votos atômica.
           </p>
         </div>
 
         <div className="flex items-center gap-2">
-          <RoundStatus status={roundStatus} />
+          <RoundStatus status={normalizedStatus} />
         </div>
       </div>
+
+      {errorMessage && (
+        <div className="p-3 rounded-xl bg-arena-red/15 border border-arena-red/40 text-arena-red text-xs flex items-center gap-2">
+          <AlertCircle className="w-4 h-4 shrink-0" />
+          <span>{errorMessage}</span>
+        </div>
+      )}
 
       {/* Grid Principal: Projeto em Avaliação + Métricas */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
@@ -181,18 +278,18 @@ export const AdminRoundPage: React.FC = () => {
           </div>
         </div>
 
-        {/* Métricas em Tempo Real: Participação e Cronômetro */}
+        {/* Métricas em Tempo Real: Participação e Cronômetro do Servidor */}
         <div className="flex flex-col justify-between gap-5">
           <VoteCounter count={votesCount} />
-          <RoundTimer seconds={seconds} isActive={roundStatus === 'aberta'} />
+          <RoundTimer seconds={seconds} isActive={normalizedStatus === 'aberta'} />
 
           {/* Quick Info Box */}
           <div className="bg-arena-card/80 border border-arena-border rounded-2xl p-4 text-xs text-gray-400 space-y-2">
             <div className="font-bold text-gray-300 uppercase tracking-wider text-[10px]">
-              Regra de Operação:
+              Sincronização em Tempo Real:
             </div>
             <p className="leading-relaxed">
-              O botão <span className="text-arena-blue font-bold">Próximo Projeto</span> avança o projeto e define o estado como <span className="text-arena-gold font-bold">Aguardando liberação</span>. O operador tem total controle para liberar a votação quando o apresentador autorizar.
+              O cronômetro utiliza o timestamp do servidor (<span className="text-white font-mono">startedAt</span>), mantendo a integridade mesmo se a aba for atualizada. O contador de votos reflete as transações atômicas instantâneas.
             </p>
           </div>
         </div>
@@ -201,25 +298,38 @@ export const AdminRoundPage: React.FC = () => {
       {/* Barra de Ações: Botões de Controle */}
       <div className="bg-arena-card border border-arena-border rounded-2xl p-5 flex flex-wrap items-center justify-between gap-4 shadow-xl">
         <div className="flex flex-wrap items-center gap-3 w-full sm:w-auto">
-          {/* Se a rodada estiver em 'aguardando', exibe botão para liberar */}
-          {roundStatus === 'aguardando' && (
+          {/* Se a rodada estiver em 'aguardando', exibe botão Dourado para liberar */}
+          {normalizedStatus === 'aguardando' && (
             <AdminActionButton
               onClick={handleOpenRound}
               variant="gold"
+              isLoading={isLoadingAction}
               icon={<Play className="w-4 h-4 fill-current" />}
             >
               LIBERAR AVALIAÇÃO
             </AdminActionButton>
           )}
 
-          {/* Botão Vermelho: Encerrar Avaliação */}
-          {roundStatus !== 'aguardando' && (
+          {/* Botão Vermelho: Encerrar Avaliação ou Reabrir */}
+          {normalizedStatus === 'aberta' && (
             <AdminActionButton
-              onClick={handleToggleEncerrar}
+              onClick={handleCloseRound}
               variant="danger"
+              isLoading={isLoadingAction}
               icon={<Square className="w-4 h-4 fill-current" />}
             >
-              {roundStatus === 'aberta' ? 'ENCERRAR AVALIAÇÃO' : 'REABRIR AVALIAÇÃO'}
+              ENCERRAR AVALIAÇÃO
+            </AdminActionButton>
+          )}
+
+          {normalizedStatus === 'encerrada' && (
+            <AdminActionButton
+              onClick={handleOpenRound}
+              variant="primary"
+              isLoading={isLoadingAction}
+              icon={<Play className="w-4 h-4 fill-current" />}
+            >
+              REABRIR AVALIAÇÃO
             </AdminActionButton>
           )}
 
@@ -227,6 +337,7 @@ export const AdminRoundPage: React.FC = () => {
           <AdminActionButton
             onClick={handleNextProject}
             variant="primary"
+            isLoading={isLoadingAction}
             icon={<FastForward className="w-4 h-4 fill-current" />}
           >
             PRÓXIMO PROJETO

@@ -1,44 +1,33 @@
 import React, { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import { ArenaLogo } from '@/components/branding';
 import { ProjectBanner } from '@/components/ui';
 import { RatingSelector, VotingButton } from '@/components/voting';
-import { Lightbulb, TrendingUp, Rocket, Send } from 'lucide-react';
+import { useVoting } from '@/contexts/VotingContext';
+import { Lightbulb, TrendingUp, Rocket, Send, AlertCircle } from 'lucide-react';
 
 export const EvaluationPage: React.FC = () => {
-  const navigate = useNavigate();
+  const { currentProject, isSubmitting, errorMessage, submitCurrentVote, clearError } = useVoting();
 
   // Estados dos três critérios oficiais (1 a 5, inicialmente nulos)
   const [inovacao, setInovacao] = useState<number | null>(null);
   const [impacto, setImpacto] = useState<number | null>(null);
   const [salto, setSalto] = useState<number | null>(null);
-  const [isSubmitting, setIsSubmitting] = useState(false);
 
   // O botão AVALIAR só é habilitado quando os 3 critérios estiverem preenchidos
   const isFormComplete = inovacao !== null && impacto !== null && salto !== null;
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!isFormComplete) return;
+    if (!isFormComplete || isSubmitting) return;
 
-    setIsSubmitting(true);
+    clearError();
 
-    // Na Etapa 2: transição com feedback imediato; na Etapa 5 conectará com Firestore
-    setTimeout(() => {
-      // Salva voto demonstrativo no sessionStorage para a tela de confirmação
-      sessionStorage.setItem(
-        'arena_voice_last_vote_demo',
-        JSON.stringify({
-          project: 'Projeto 01',
-          inovacao,
-          impacto,
-          salto,
-          timestamp: new Date().toISOString(),
-        })
-      );
-      navigate('/confirmacao');
-    }, 400);
+    await submitCurrentVote({
+      innovation: inovacao,
+      impact: impacto,
+      development: salto,
+    });
   };
 
   return (
@@ -57,12 +46,21 @@ export const EvaluationPage: React.FC = () => {
         />
       </motion.div>
 
-      {/* 2. Formulário de Avaliação */}
+      {/* Alerta de Erro do Servidor */}
+      {errorMessage && (
+        <div className="mb-2 p-3 rounded-xl bg-arena-red/15 border border-arena-red/40 text-arena-red text-xs flex items-center gap-2">
+          <AlertCircle className="w-4 h-4 shrink-0" />
+          <span>{errorMessage}</span>
+        </div>
+      )}
+
+      {/* 2. Formulário de Avaliação em Tempo Real */}
       <form onSubmit={handleSubmit} className="flex-1 flex flex-col justify-between space-y-3 sm:space-y-4 my-2">
-        {/* Banner do Projeto */}
+        {/* Banner do Projeto Ativo no Palco */}
         <ProjectBanner
-          title="Projeto 01"
-          category="Plataforma de Inovação e Eficiência"
+          title={currentProject?.name || 'Projeto em Avaliação'}
+          category={currentProject?.description || 'Plataforma de Inovação e Eficiência'}
+          bannerUrl={currentProject?.bannerUrl}
         />
 
         {/* 3 Critérios Oficiais */}
@@ -98,7 +96,7 @@ export const EvaluationPage: React.FC = () => {
           />
         </div>
 
-        {/* 3. Botão AVALIAR (desabilitado até os 3 critérios estarem preenchidos) */}
+        {/* 3. Botão AVALIAR */}
         <div className="pt-2 pb-2 space-y-1.5">
           <VotingButton
             type="submit"
@@ -108,7 +106,7 @@ export const EvaluationPage: React.FC = () => {
             icon={<Send className="w-4 h-4 fill-current" />}
             className="shadow-red-glow text-sm sm:text-base py-3.5"
           >
-            AVALIAR
+            {isSubmitting ? 'REGISTRANDO NO SERVIDOR...' : 'AVALIAR'}
           </VotingButton>
 
           {!isFormComplete && (

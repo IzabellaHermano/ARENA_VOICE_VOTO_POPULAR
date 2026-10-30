@@ -2,7 +2,7 @@ import { onCall, HttpsError } from 'firebase-functions/v2/https';
 import * as admin from 'firebase-admin';
 
 export const closeRound = onCall({ region: 'southamerica-east1' }, async (request) => {
-  // 1. Validação de administrador
+  // 1. Validação de autenticação e permissão de administrador
   if (!request.auth) {
     throw new HttpsError('unauthenticated', 'Usuário não autenticado.');
   }
@@ -26,16 +26,21 @@ export const closeRound = onCall({ region: 'southamerica-east1' }, async (reques
     throw new HttpsError('not-found', 'Rodada não encontrada.');
   }
 
+  const roundData = roundDoc.data();
+  if (roundData?.eventId !== eventId) {
+    throw new HttpsError('invalid-argument', 'A rodada não pertence a este evento.');
+  }
+
   const batch = db.batch();
 
-  // Atualizar rodada para 'closed'
+  // 2. Encerrar a rodada e registrar horário final do servidor para bloquear novos votos
   batch.update(roundRef, {
     status: 'closed',
     endedAt: admin.firestore.FieldValue.serverTimestamp(),
     updatedAt: admin.firestore.FieldValue.serverTimestamp(),
   });
 
-  // Atualizar evento
+  // 3. Atualizar o estado global do evento
   const eventRef = db.collection('events').doc(eventId);
   batch.update(eventRef, {
     currentRoundId: null,
@@ -47,6 +52,7 @@ export const closeRound = onCall({ region: 'southamerica-east1' }, async (reques
   return {
     success: true,
     roundId,
-    message: 'Rodada encerrada com sucesso.',
+    status: 'closed',
+    message: 'Rodada encerrada com sucesso. Novos votos estão impedidos.',
   };
 });

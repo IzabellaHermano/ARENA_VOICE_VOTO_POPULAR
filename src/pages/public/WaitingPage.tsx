@@ -1,12 +1,14 @@
 import React from 'react';
-import { useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import { ArenaLogo } from '@/components/branding';
 import { WaitingAnimation, ProgressIndicator, StatusMessage } from '@/components/ui';
-import { Play } from 'lucide-react';
+import { useVoting } from '@/contexts/VotingContext';
+import { RadioTower, AlertCircle } from 'lucide-react';
 
 export const WaitingPage: React.FC = () => {
-  const navigate = useNavigate();
+  const { currentProject, connectionStatus, errorMessage } = useVoting();
+
+  const currentOrder = currentProject?.order || 1;
 
   return (
     <div className="flex-1 flex flex-col justify-between items-center text-center py-2 sm:py-4">
@@ -36,34 +38,43 @@ export const WaitingPage: React.FC = () => {
             Aguardando liberação<br />do próximo projeto.
           </h1>
           <p className="text-xs sm:text-sm text-gray-400">
-            A votação será liberada automaticamente pelo apresentador.
+            {currentProject?.name ? (
+              <span>
+                Próximo participante: <strong className="text-white">{currentProject.name}</strong>
+              </span>
+            ) : (
+              'A votação será liberada automaticamente pelo apresentador.'
+            )}
           </p>
         </div>
 
         {/* Indicador de Progresso (4 rodadas) */}
         <div className="pt-2">
-          <ProgressIndicator currentStep={1} totalSteps={4} />
+          <ProgressIndicator currentStep={currentOrder} totalSteps={4} />
         </div>
       </div>
 
-      {/* 3. Card Informativo Inferior & Ação de Demonstração */}
+      {/* 3. Card Informativo Inferior & Status de Sincronização */}
       <div className="w-full pb-3 sm:pb-5 space-y-3">
+        {errorMessage && (
+          <div className="p-3 rounded-xl bg-arena-red/15 border border-arena-red/40 text-arena-red text-xs flex items-center justify-center gap-2">
+            <AlertCircle className="w-4 h-4 shrink-0" />
+            <span>{errorMessage}</span>
+          </div>
+        )}
+
         <StatusMessage
           variant="neutral"
           message="Em instantes um novo projeto será apresentado."
-          submessage="Mantenha esta tela aberta no seu celular."
+          submessage="Mantenha esta tela aberta no seu celular. A página atualiza automaticamente."
         />
 
-        {/* Demonstração para testes da Etapa 2 */}
-        <div className="pt-1">
-          <button
-            type="button"
-            onClick={() => navigate('/avaliar')}
-            className="w-full text-xs text-gray-400 hover:text-white py-2 px-3 rounded-lg bg-white/5 hover:bg-white/10 border border-white/5 flex items-center justify-center gap-1.5 transition-colors"
-          >
-            <Play className="w-3 h-3 text-arena-red fill-current" />
-            <span>[Simular Liberação de Projeto — Demonstração Etapa 2]</span>
-          </button>
+        {/* Indicador de Conexão em Tempo Real */}
+        <div className="flex items-center justify-center gap-2 text-[11px] text-gray-400 font-medium">
+          <RadioTower className={`w-3.5 h-3.5 ${connectionStatus === 'connected' ? 'text-arena-green animate-pulse' : 'text-gray-500'}`} />
+          <span>
+            {connectionStatus === 'connected' ? 'Sincronizado em tempo real com o palco' : 'Conectando ao servidor...'}
+          </span>
         </div>
       </div>
     </div>

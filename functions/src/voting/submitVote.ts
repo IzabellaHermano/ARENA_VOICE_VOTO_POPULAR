@@ -2,7 +2,7 @@ import { onCall, HttpsError } from 'firebase-functions/v2/https';
 import * as admin from 'firebase-admin';
 
 export const submitVote = onCall({ region: 'southamerica-east1' }, async (request) => {
-  // 1. Verificação de autenticação obrigatória (inclui autenticação anônima do público)
+  // 1. Validação de autenticação obrigatória (inclui autenticação anônima do público)
   if (!request.auth) {
     throw new HttpsError(
       'unauthenticated',
@@ -10,10 +10,18 @@ export const submitVote = onCall({ region: 'southamerica-east1' }, async (reques
     );
   }
 
+  // 2. Validação opcional de App Check quando ativado no ambiente
+  if (process.env.ENFORCE_APP_CHECK === 'true' && !request.app) {
+    throw new HttpsError(
+      'failed-precondition',
+      'A validação de integridade do aplicativo (App Check) falhou.'
+    );
+  }
+
   const voterUid = request.auth.uid;
   const { eventId, roundId, projectId, innovation, impact, development } = request.data || {};
 
-  // 2. Validação de parâmetros obrigatórios
+  // 3. Validação de parâmetros obrigatórios
   if (!eventId || !roundId || !projectId) {
     throw new HttpsError(
       'invalid-argument',
@@ -32,7 +40,7 @@ export const submitVote = onCall({ region: 'southamerica-east1' }, async (reques
   ) {
     throw new HttpsError(
       'invalid-argument',
-      'As notas de inovação, impacto e salto de desenvolvimento devem ser inteiros entre 1 e 5.'
+      'As notas de inovação, impacto e salto de desenvolvimento devem ser inteiros de 1 a 5.'
     );
   }
 
@@ -42,7 +50,7 @@ export const submitVote = onCall({ region: 'southamerica-east1' }, async (reques
 
   const db = admin.firestore();
 
-  // 3. Transação atômica para garantir voto único e cálculo consolidado consistente
+  // 4. Transação atômica para garantir voto único e cálculo consolidado consistente
   await db.runTransaction(async (transaction) => {
     const voteRef = db.collection('votes').doc(voteDocId);
     const existingVote = await transaction.get(voteRef);
@@ -57,21 +65,28 @@ export const submitVote = onCall({ region: 'southamerica-east1' }, async (reques
     const roundRef = db.collection('rounds').doc(roundId);
     const roundDoc = await transaction.get(roundRef);
 
-    if (!roundDoc.exists || roundDoc.data()?.status !== 'open') {
+    if (!roundDoc.exists) {
+      throw new HttpsError(
+        'not-found',
+        'A rodada indicada não foi encontrada.'
+      );
+    }
+
+    if (roundDoc.data()?.status !== 'open') {
       throw new HttpsError(
         'failed-precondition',
-        'A rodada de avaliação para este projeto não está aberta.'
+        'A rodada de avaliação para este projeto já foi encerrada.'
       );
     }
 
     if (roundDoc.data()?.projectId !== projectId) {
       throw new HttpsError(
         'invalid-argument',
-        'A rodada indicada não corresponde ao projeto avaliado.'
+        'A rodada indicada não corresponde ao projeto em avaliação.'
       );
     }
 
-    // Registrar o voto individual
+    // Registrar o voto individual com timestamp do servidor
     transaction.set(voteRef, {
       eventId,
       roundId,
@@ -131,6 +146,7 @@ export const submitVote = onCall({ region: 'southamerica-east1' }, async (reques
   return {
     success: true,
     voteId: voteDocId,
-    message: 'Voto computado com sucesso no servidor!',
+    projectId,
+    message: 'Voto confirmado e registrado no servidor com sucesso!',
   };
 });

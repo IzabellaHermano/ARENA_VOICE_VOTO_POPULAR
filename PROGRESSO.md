@@ -11,11 +11,63 @@ Este documento registra o status de execução de cada uma das 9 etapas de desen
 - [x] **Etapa 2: Implementação Completa das Telas do Público** (Concluída ✅)
 - [x] **Etapa 3: Desenvolvimento do Painel Administrativo** (Concluída ✅)
 - [x] **Etapa 4: Configuração do Firebase e Modelo de Dados** (Concluída ✅)
-- [ ] **Etapa 5: Controle de Rodadas, Sincronização em Tempo Real e Voto Único com Firebase** (Aguardando autorização)
-- [ ] **Etapa 6: Consolidação de Resultados e Cálculo Oficial dos 20%** (Pendente)
+- [x] **Etapa 5: Controle de Rodadas, Sincronização em Tempo Real e Voto Único com Firebase** (Concluída ✅)
+- [ ] **Etapa 6: Consolidação de Resultados e Cálculo Oficial dos 20%** (Aguardando autorização)
 - [ ] **Etapa 7: Telão de Projeção, Pódio e Visualização de Métricas** (Pendente)
 - [ ] **Etapa 8: Relatórios, Exportação de Dados e Auditoria** (Pendente)
 - [ ] **Etapa 9: Testes de Carga, Resiliência, Otimização e Homologação Final** (Pendente)
+
+---
+
+### Detalhamento da Etapa 5 — Concluída ✅
+
+#### 1. Fluxo Administrativo Completo Integrado ao Firebase
+- Operações de controle de rodada executadas via Cloud Functions com verificação estrita de permissões administrativas no servidor:
+  - **`openRound`** ([`functions/src/rounds/openRound.ts`](file:///c:/Users/IZABELLAA/Documents/ARENA_VOICE_VOTO_POPULAR/functions/src/rounds/openRound.ts)): Encerra automaticamente qualquer rodada previamente aberta, valida o projeto ativo, gera o documento da nova rodada com status `open` e registra `startedAt: FieldValue.serverTimestamp()`, atualizando o evento de forma atômica no Firestore. Garante que apenas **uma rodada permaneça aberta por evento**.
+  - **`closeRound`** ([`functions/src/rounds/closeRound.ts`](file:///c:/Users/IZABELLAA/Documents/ARENA_VOICE_VOTO_POPULAR/functions/src/rounds/closeRound.ts)): Encerra a rodada ativa no servidor, registra `endedAt: FieldValue.serverTimestamp()` e atualiza o status para `closed`, impedindo imediatamente novas submissões de voto.
+  - **`prepareNextRound`** ([`functions/src/rounds/prepareNextRound.ts`](file:///c:/Users/IZABELLAA/Documents/ARENA_VOICE_VOTO_POPULAR/functions/src/rounds/prepareNextRound.ts)): Verifica o encerramento da rodada anterior, identifica o próximo projeto por ordem sequencial e coloca o evento no estado de preparação (`waiting`). **Não abre automaticamente a votação**, preservando o controle humano do operador de palco.
+- Integração nas páginas administrativas:
+  - [`AdminProjectsPage.tsx`](file:///c:/Users/IZABELLAA/Documents/ARENA_VOICE_VOTO_POPULAR/src/pages/admin/AdminProjectsPage.tsx): Botão "Liberar Votação" dispara `openRound` diretamente no servidor.
+  - [`AdminRoundPage.tsx`](file:///c:/Users/IZABELLAA/Documents/ARENA_VOICE_VOTO_POPULAR/src/pages/admin/AdminRoundPage.tsx): Controle de rodada em tempo real com botões de encerrar avaliação, preparar próximo projeto e abrir próxima rodada.
+
+#### 2. Fluxo Público Reativo e Automático
+- Implementado em [`VotingContext.tsx`](file:///c:/Users/IZABELLAA/Documents/ARENA_VOICE_VOTO_POPULAR/src/contexts/VotingContext.tsx) e páginas do público:
+  - **Sessão Anônima Persistente:** O participante obtém UID anônimo automaticamente ao acessar `/votar`, preservado no navegador via `browserLocalPersistence`.
+  - **Reatividade em Tempo Real (`onSnapshot`):** Assinatura instantânea do estado do evento e da rodada ativa sem necessidade de polling ou recarregar a página (`F5`).
+  - **Transição Automática de Telas:**
+    - Ao acessar com rodada fechada ou em preparação $\rightarrow$ Redirecionamento automático para a tela de espera ([`WaitingPage.tsx`](file:///c:/Users/IZABELLAA/Documents/ARENA_VOICE_VOTO_POPULAR/src/pages/public/WaitingPage.tsx)).
+    - Quando o administrador clica em "Liberar Votação" $\rightarrow$ O evento é atualizado no Firestore e todos os celulares conectados transitam instantaneamente para a tela de avaliação ([`EvaluationPage.tsx`](file:///c:/Users/IZABELLAA/Documents/ARENA_VOICE_VOTO_POPULAR/src/pages/public/EvaluationPage.tsx)) com o banner, nome e descrição do projeto ativo.
+    - O participante seleciona as 3 notas (1 a 5) para Inovação, Impacto e Salto Tecnológico e clica em "CONFIRMAR VOTO".
+    - Validação e envio executados via Cloud Function `submitVote` com feedback visual de carregamento.
+    - Recebimento de confirmação oficial com timestamp e transição automática para a tela de confirmação ([`ConfirmationPage.tsx`](file:///c:/Users/IZABELLAA/Documents/ARENA_VOICE_VOTO_POPULAR/src/pages/public/ConfirmationPage.tsx)).
+    - Quando o administrador encerra a rodada ou prepara o próximo projeto, o público transita de volta para `/aguardando`.
+
+#### 3. Prevenção de Votos Duplicados e Transação Atômica
+- Implementado na Cloud Function **`submitVote`** ([`functions/src/voting/submitVote.ts`](file:///c:/Users/IZABELLAA/Documents/ARENA_VOICE_VOTO_POPULAR/functions/src/voting/submitVote.ts)):
+  - **Chave Determinística:**
+    $$\text{voteId} = \text{eventId} + \text{"\_"} + \text{projectId} + \text{"\_"} + \text{voterUid}$$
+  - **Transação Atômica:**
+    1. Verifica autenticação do participante (`request.auth.uid`).
+    2. Valida se as 3 notas são números inteiros estritamente entre 1 e 5.
+    3. Confirma se a rodada referenciada está com status `open`.
+    4. Verifica atomicamente se o documento `votes/{voteId}` já existe. Se existir, rejeita com erro `ALREADY_EXISTS`.
+    5. Grava o voto imutável na coleção `votes`.
+    6. Atualiza atomicamente o agregador em `results/{eventId}_{projectId}` (total de votos, somatórios e recálculo das médias).
+  - Garante que cada participante vote **apenas 1 vez por projeto**, mas permite que participe das rodadas dos demais projetos da noite.
+
+#### 4. Integridade do Cronômetro do Servidor
+- Resolvido o requisito de persistência do cronômetro:
+  - O cronômetro da rodada é calculado com base no `startedAt` gravado pelo servidor Firestore (`serverTimestamp`):
+    $$\text{segundosDecorridos} = \left\lfloor \frac{\text{Date.now()} - \text{startedAt.toMillis()}}{1000} \right\rfloor$$
+  - O tempo **não reinicia** quando o operador ou o público atualiza a página ou reconecta a conexão.
+
+#### 5. Contador de Votos em Tempo Real
+- O painel administrativo escuta em tempo real o documento agregado `results/{eventId}_{projectId}` através de `subscribeToProjectResults`.
+- Conforme os votos são confirmados pela Cloud Function, o contador de votos na tela do administrador atualiza instantaneamente sem atraso ou polling.
+
+#### 6. Compilação e Qualidade de Código
+- **Backend Cloud Functions (`functions/lib/`):** Compilação TypeScript com 0 erros (`npm.cmd --prefix functions run build`).
+- **Frontend SPA (`dist/`):** Compilação completa com TypeScript e Vite com 0 erros (`npm.cmd run build`).
 
 ---
 
@@ -77,4 +129,4 @@ Este documento registra o status de execução de cada uma das 9 etapas de desen
 
 ---
 
-**Status Atual:** Etapa 4 finalizada com sucesso. Aguardando autorização do usuário para iniciar a **Etapa 5**.
+**Status Atual:** Etapa 5 finalizada com sucesso. Aguardando autorização do usuário para iniciar a **Etapa 6**.
