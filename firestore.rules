@@ -1,0 +1,30 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Regras de validação para projetos
+    match /projetos/{projetoId} {
+      allow read: if true;
+      allow write: if request.auth != null;
+    }
+
+    // Regras de validação para votos
+    // O ID do voto é projetoId_uid para garantir voto único por usuário
+    match /votos/{votoId} {
+      allow read: if request.auth != null;
+      allow create: if request.auth != null
+                    && votoId == request.resource.data.projetoId + '_' + request.auth.uid
+                    && request.resource.data.inovacao >= 1 && request.resource.data.inovacao <= 5
+                    && request.resource.data.impacto >= 1 && request.resource.data.impacto <= 5
+                    && request.resource.data.salto >= 1 && request.resource.data.salto <= 5;
+      allow update, delete: if false; // Imutabilidade do voto
+    }
+
+    // Regras de controle da rodada
+    match /rodada/{docId} {
+      allow read: if true;
+      allow write: if request.auth != null;
+    }
+  }
+}
+
