@@ -7,7 +7,6 @@ import AdminLayout from '@/components/layout/AdminLayout';
 
 // Public Pages
 import HomePage from '@/pages/public/HomePage';
-import VotingEntryPage from '@/pages/public/VotingEntryPage';
 import WaitingPage from '@/pages/public/WaitingPage';
 import EvaluationPage from '@/pages/public/EvaluationPage';
 import ConfirmationPage from '@/pages/public/ConfirmationPage';
@@ -26,7 +25,7 @@ export const AppRoutes: React.FC = () => {
       {/* Rotas Públicas com PublicLayout */}
       <Route element={<PublicLayout />}>
         <Route path="/" element={<HomePage />} />
-        <Route path="/votar" element={<VotingEntryPage />} />
+        <Route path="/votar" element={<HomePage />} />
         <Route path="/aguardando" element={<WaitingPage />} />
         <Route path="/avaliar" element={<EvaluationPage />} />
         <Route path="/confirmacao" element={<ConfirmationPage />} />

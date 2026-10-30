@@ -1,114 +1,125 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { motion } from 'framer-motion';
 import { ArenaLogo } from '@/components/branding';
-import { Send, Lightbulb, TrendingUp, Rocket } from 'lucide-react';
+import { ProjectBanner } from '@/components/ui';
+import { RatingSelector, VotingButton } from '@/components/voting';
+import { Lightbulb, TrendingUp, Rocket, Send } from 'lucide-react';
 
 export const EvaluationPage: React.FC = () => {
   const navigate = useNavigate();
 
-  const [inovacao, setInovacao] = useState<number>(4);
-  const [impacto, setImpacto] = useState<number>(5);
-  const [salto, setSalto] = useState<number>(4);
+  // Estados dos três critérios oficiais (1 a 5, inicialmente nulos)
+  const [inovacao, setInovacao] = useState<number | null>(null);
+  const [impacto, setImpacto] = useState<number | null>(null);
+  const [salto, setSalto] = useState<number | null>(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
+  // O botão AVALIAR só é habilitado quando os 3 critérios estiverem preenchidos
+  const isFormComplete = inovacao !== null && impacto !== null && salto !== null;
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    navigate('/confirmacao');
+    if (!isFormComplete) return;
+
+    setIsSubmitting(true);
+
+    // Na Etapa 2: transição com feedback imediato; na Etapa 5 conectará com Firestore
+    setTimeout(() => {
+      // Salva voto demonstrativo no sessionStorage para a tela de confirmação
+      sessionStorage.setItem(
+        'arena_voice_last_vote_demo',
+        JSON.stringify({
+          project: 'Projeto 01',
+          inovacao,
+          impacto,
+          salto,
+          timestamp: new Date().toISOString(),
+        })
+      );
+      navigate('/confirmacao');
+    }, 400);
   };
 
-  const renderRatingButtons = (
-    value: number,
-    onChange: (val: number) => void
-  ) => (
-    <div className="flex justify-between items-center gap-1.5 mt-2">
-      {[1, 2, 3, 4, 5].map((num) => (
-        <button
-          key={num}
-          type="button"
-          onClick={() => onChange(num)}
-          className={`flex-1 py-2 rounded-lg text-sm font-bold transition-all ${
-            value === num
-              ? 'bg-arena-red text-white shadow-red-glow scale-105'
-              : 'bg-arena-card border border-arena-border text-gray-300 hover:bg-white/10'
-          }`}
-        >
-          {num}
-        </button>
-      ))}
-    </div>
-  );
-
   return (
-    <div className="flex-1 flex flex-col items-center justify-between py-4">
-      {/* Header - Logo completa em versão compacta */}
-      <div className="w-full flex justify-center py-2">
-        <ArenaLogo variant="complete" width={190} />
-      </div>
+    <div className="flex-1 flex flex-col justify-between py-1 sm:py-2">
+      {/* 1. Header: Logo Oficial adaptada ao espaço */}
+      <motion.div
+        initial={{ opacity: 0, y: -4 }}
+        animate={{ opacity: 1, y: 0 }}
+        className="w-full flex justify-center py-1 sm:py-2"
+      >
+        <ArenaLogo
+          variant="complete"
+          width={180}
+          className="max-w-[170px] sm:max-w-[190px]"
+          alt="Arena Voice"
+        />
+      </motion.div>
 
-      <form onSubmit={handleSubmit} className="w-full flex-1 flex flex-col justify-between max-w-sm">
-        {/* Project Card */}
-        <div className="bg-arena-card border border-arena-border rounded-xl overflow-hidden mb-4">
-          <div className="h-24 bg-gradient-to-r from-gray-800 to-gray-700 flex items-center justify-center text-xs font-semibold uppercase tracking-wider text-gray-300">
-            Banner do Projeto
-          </div>
-          <div className="p-3 text-center">
-            <h3 className="text-base font-bold text-white">Projeto 01</h3>
-          </div>
+      {/* 2. Formulário de Avaliação */}
+      <form onSubmit={handleSubmit} className="flex-1 flex flex-col justify-between space-y-3 sm:space-y-4 my-2">
+        {/* Banner do Projeto */}
+        <ProjectBanner
+          title="Projeto 01"
+          category="Plataforma de Inovação e Eficiência"
+        />
+
+        {/* 3 Critérios Oficiais */}
+        <div className="space-y-3">
+          {/* Critério 1: Nível de Inovação */}
+          <RatingSelector
+            id="inovacao"
+            title="Nível de Inovação"
+            description="Avalia a originalidade e a inovação da solução."
+            icon={<Lightbulb className="w-4 h-4 text-arena-gold" />}
+            value={inovacao}
+            onChange={(val) => setInovacao(val)}
+          />
+
+          {/* Critério 2: Impacto do Projeto na CPTM */}
+          <RatingSelector
+            id="impacto"
+            title="Impacto do Projeto na CPTM"
+            description="Avalia a contribuição do projeto para a companhia."
+            icon={<TrendingUp className="w-4 h-4 text-arena-blue" />}
+            value={impacto}
+            onChange={(val) => setImpacto(val)}
+          />
+
+          {/* Critério 3: Salto de Desenvolvimento do Projeto */}
+          <RatingSelector
+            id="salto"
+            title="Salto de Desenvolvimento do Projeto"
+            description="Avalia a evolução apresentada pelo projeto."
+            icon={<Rocket className="w-4 h-4 text-arena-red" />}
+            value={salto}
+            onChange={(val) => setSalto(val)}
+          />
         </div>
 
-        {/* Criteria Sliders / Buttons */}
-        <div className="space-y-4 mb-4">
-          {/* Critério 1: Inovação */}
-          <div className="bg-arena-card/80 border border-arena-border/80 rounded-xl p-3.5">
-            <div className="flex items-center gap-2 text-xs font-semibold text-gray-200">
-              <Lightbulb className="w-4 h-4 text-arena-gold" />
-              <span>Nível de Inovação</span>
-            </div>
-            {renderRatingButtons(inovacao, setInovacao)}
-            <div className="flex justify-between text-[10px] text-gray-400 mt-1 px-1">
-              <span>1 - Baixo</span>
-              <span>5 - Muito bom</span>
-            </div>
-          </div>
+        {/* 3. Botão AVALIAR (desabilitado até os 3 critérios estarem preenchidos) */}
+        <div className="pt-2 pb-2 space-y-1.5">
+          <VotingButton
+            type="submit"
+            disabled={!isFormComplete || isSubmitting}
+            isLoading={isSubmitting}
+            variant="primary"
+            icon={<Send className="w-4 h-4 fill-current" />}
+            className="shadow-red-glow text-sm sm:text-base py-3.5"
+          >
+            AVALIAR
+          </VotingButton>
 
-          {/* Critério 2: Impacto na CPTM */}
-          <div className="bg-arena-card/80 border border-arena-border/80 rounded-xl p-3.5">
-            <div className="flex items-center gap-2 text-xs font-semibold text-gray-200">
-              <TrendingUp className="w-4 h-4 text-arena-blue" />
-              <span>Impacto do Projeto na CPTM</span>
-            </div>
-            {renderRatingButtons(impacto, setImpacto)}
-            <div className="flex justify-between text-[10px] text-gray-400 mt-1 px-1">
-              <span>1 - Baixo</span>
-              <span>5 - Muito bom</span>
-            </div>
-          </div>
-
-          {/* Critério 3: Salto de Desenvolvimento */}
-          <div className="bg-arena-card/80 border border-arena-border/80 rounded-xl p-3.5">
-            <div className="flex items-center gap-2 text-xs font-semibold text-gray-200">
-              <Rocket className="w-4 h-4 text-arena-red" />
-              <span>Salto de Desenvolvimento do Projeto</span>
-            </div>
-            {renderRatingButtons(salto, setSalto)}
-            <div className="flex justify-between text-[10px] text-gray-400 mt-1 px-1">
-              <span>1 - Baixo</span>
-              <span>5 - Muito bom</span>
-            </div>
-          </div>
+          {!isFormComplete && (
+            <p className="text-center text-[10px] text-gray-400">
+              Selecione uma nota de 1 a 5 nos 3 critérios para enviar seu voto.
+            </p>
+          )}
         </div>
-
-        {/* Submit Button */}
-        <button
-          type="submit"
-          className="w-full bg-arena-red hover:bg-arena-redHover text-white font-bold py-3 px-6 rounded-xl shadow-red-glow flex items-center justify-center gap-2 transition-all"
-        >
-          <Send className="w-4 h-4 fill-current" />
-          <span>AVALIAR</span>
-        </button>
       </form>
     </div>
   );
 };
 
 export default EvaluationPage;
-

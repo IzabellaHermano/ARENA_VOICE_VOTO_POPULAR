@@ -1,19 +1,50 @@
 import React from 'react';
-import { Outlet } from 'react-router-dom';
+import { Outlet, useLocation } from 'react-router-dom';
+import { motion, AnimatePresence } from 'framer-motion';
 
 export const PublicLayout: React.FC = () => {
-  return (
-    <div className="min-h-screen bg-arena-dark text-white flex flex-col items-center justify-between relative overflow-hidden">
-      {/* Glow background ambiance */}
-      <div className="pointer-events-none absolute -top-40 -left-40 w-96 h-96 bg-arena-red/10 rounded-full blur-3xl" />
-      <div className="pointer-events-none absolute -bottom-40 -right-40 w-96 h-96 bg-arena-blue/10 rounded-full blur-3xl" />
+  const location = useLocation();
 
-      <main className="w-full max-w-md mx-auto flex-1 flex flex-col px-4 py-6 relative z-10">
-        <Outlet />
+  return (
+    <div className="min-h-screen bg-arena-black text-white flex flex-col items-center justify-between relative overflow-x-hidden select-none">
+      {/* Background Stage Atmosphere & Spotlights */}
+      <div className="fixed inset-0 pointer-events-none z-0">
+        {/* Red spotlight from upper-left */}
+        <div className="absolute -top-32 -left-28 w-96 h-96 rounded-full bg-arena-red/20 blur-[100px]" />
+        
+        {/* Navy/Blue spotlight from upper-right */}
+        <div className="absolute -top-32 -right-28 w-96 h-96 rounded-full bg-arena-blue/15 blur-[100px]" />
+        
+        {/* Stage floor ambiance glow */}
+        <div className="absolute bottom-0 left-0 right-0 h-64 bg-gradient-to-t from-[#04060c] via-arena-navy/20 to-transparent opacity-90" />
+
+        {/* Subtle grid pattern for stage tech feel */}
+        <div
+          className="absolute inset-0 opacity-[0.03]"
+          style={{
+            backgroundImage: `radial-gradient(rgba(255, 255, 255, 0.4) 1px, transparent 1px)`,
+            backgroundSize: '24px 24px',
+          }}
+        />
+      </div>
+
+      {/* Main Responsive Mobile Viewport */}
+      <main className="w-full max-w-[440px] min-h-screen mx-auto flex flex-col justify-between px-4 sm:px-5 py-4 sm:py-6 relative z-10">
+        <AnimatePresence mode="wait">
+          <motion.div
+            key={location.pathname}
+            initial={{ opacity: 0, y: 8 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -8 }}
+            transition={{ duration: 0.25, ease: 'easeInOut' }}
+            className="flex-1 flex flex-col"
+          >
+            <Outlet />
+          </motion.div>
+        </AnimatePresence>
       </main>
     </div>
   );
 };
 
 export default PublicLayout;
-
