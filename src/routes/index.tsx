@@ -11,6 +11,8 @@ import WaitingPage from '@/pages/public/WaitingPage';
 import EvaluationPage from '@/pages/public/EvaluationPage';
 import ConfirmationPage from '@/pages/public/ConfirmationPage';
 import BigScreenRankingPage from '@/pages/public/BigScreenRankingPage';
+import BigScreenQRCodePage from '@/pages/public/BigScreenQRCodePage';
+import BigScreenPresentationPage from '@/pages/public/BigScreenPresentationPage';
 
 // Admin Pages
 import AdminLoginPage from '@/pages/admin/AdminLoginPage';
@@ -31,9 +33,11 @@ export const AppRoutes: React.FC = () => {
         <Route path="/confirmacao" element={<ConfirmationPage />} />
       </Route>
 
-      {/* Rota do Telão e Ranking (Sem sidebar administrativa, visão limpa full-screen) */}
+      {/* Rotas de Projeção em Telão (16:9 Fullscreen sem sidebar) */}
+      <Route path="/telao" element={<BigScreenPresentationPage />} />
+      <Route path="/qrcode" element={<BigScreenQRCodePage />} />
+      <Route path="/telao/qrcode" element={<BigScreenQRCodePage />} />
       <Route path="/resultados/telao" element={<BigScreenRankingPage />} />
-      <Route path="/telao" element={<BigScreenRankingPage />} />
       <Route path="/ranking" element={<BigScreenRankingPage />} />
 
       {/* Rota de Login Administrativo */}

@@ -15,7 +15,7 @@
  * 10. Desempenho e agregação (não carregamento de votos brutos)
  */
 
-import { calculateProjectScore, rankProjects, formatScore, formatPercent } from '../src/utils/scoring.js';
+import { calculateProjectScore, rankProjects, formatScore, formatPercent } from '../src/utils/scoring.ts';
 
 let passedCount = 0;
 let failedCount = 0;

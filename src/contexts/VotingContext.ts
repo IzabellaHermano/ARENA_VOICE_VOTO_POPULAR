@@ -9,7 +9,7 @@ export interface VotingContextType {
   hasVotedCurrentProject: boolean;
   isLoading: boolean;
   isSubmitting: boolean;
-  connectionStatus: 'connected' | 'connecting' | 'offline';
+  connectionStatus: 'connected' | 'connecting' | 'reconnecting' | 'offline';
   errorMessage: string | null;
   submitCurrentVote: (scores: { innovation: number; impact: number; development: number }) => Promise<void>;
   clearError: () => void;

@@ -9,7 +9,7 @@ import {
   VoteCounter,
   AdminActionButton,
 } from '@/components/admin';
-import { Square, FastForward, BarChart2, RadioTower, Play, Layers, AlertCircle } from 'lucide-react';
+import { Square, FastForward, BarChart2, RadioTower, Play, Layers, AlertCircle, QrCode, Tv } from 'lucide-react';
 
 export const AdminRoundPage: React.FC = () => {
   const navigate = useNavigate();
@@ -215,7 +215,29 @@ export const AdminRoundPage: React.FC = () => {
           </p>
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
+          <a
+            href="/qrcode"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="px-3 py-2 rounded-xl bg-white/5 hover:bg-white/10 text-gray-200 border border-arena-border text-xs font-bold flex items-center gap-1.5 transition-colors"
+            title="Abrir tela de QR Code para escaneamento"
+          >
+            <QrCode className="w-3.5 h-3.5 text-arena-gold" />
+            <span>QR Code</span>
+          </a>
+
+          <a
+            href="/telao"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="px-3 py-2 rounded-xl bg-gradient-to-r from-arena-red to-red-700 hover:from-red-600 hover:to-red-800 text-white shadow-neon-glow text-xs font-bold flex items-center gap-1.5 transition-all"
+            title="Abrir Telão 16:9 Oficial"
+          >
+            <Tv className="w-3.5 h-3.5" />
+            <span>Telão 16:9</span>
+          </a>
+
           <RoundStatus status={normalizedStatus} />
         </div>
       </div>

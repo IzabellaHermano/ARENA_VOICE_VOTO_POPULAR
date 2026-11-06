@@ -18,7 +18,7 @@
  * - Preservação estrita de empates reais
  */
 
-import { ProjectDocument, ResultDocument } from '@/types';
+import type { ProjectDocument, ResultDocument } from '../types';
 
 export interface ProjectScoringResult {
   projectId: string;

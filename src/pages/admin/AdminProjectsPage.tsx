@@ -4,7 +4,7 @@ import { Project } from '@/types';
 import { EventService, DEFAULT_EVENT_ID } from '@/services/eventService';
 import { AdminMockService } from '@/services/adminMockService';
 import { ProjectCard, ProjectForm, AdminActionButton } from '@/components/admin';
-import { Play, Plus, Sparkles, AlertCircle } from 'lucide-react';
+import { Play, Plus, Sparkles, AlertCircle, QrCode } from 'lucide-react';
 
 export const AdminProjectsPage: React.FC = () => {
   const navigate = useNavigate();
@@ -136,7 +136,17 @@ export const AdminProjectsPage: React.FC = () => {
           </p>
         </div>
 
-        <div>
+        <div className="flex items-center gap-2">
+          <a
+            href="/qrcode"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="px-4 py-2.5 rounded-xl bg-white/5 hover:bg-white/10 text-gray-200 border border-arena-border text-xs font-bold flex items-center gap-2 transition-colors"
+          >
+            <QrCode className="w-4 h-4 text-arena-gold" />
+            <span>QR Code</span>
+          </a>
+
           <AdminActionButton
             onClick={handleOpenCreateModal}
             variant="secondary"

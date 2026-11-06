@@ -68,7 +68,7 @@ export const RatingSelector: React.FC<RatingSelectorProps> = ({
               whileHover={{ scale: 1.05 }}
               whileTap={{ scale: 0.95 }}
               onClick={() => onChange(score)}
-              className={`h-11 sm:h-12 rounded-xl font-black text-base transition-colors flex items-center justify-center select-none ${
+              className={`h-11 sm:h-12 min-h-[44px] min-w-[44px] rounded-xl font-black text-base transition-colors flex items-center justify-center select-none ${
                 isSelected
                   ? 'bg-arena-red text-white shadow-red-glow border-2 border-white/60'
                   : 'bg-arena-navy/80 hover:bg-arena-cardHover text-gray-200 border border-arena-border'
