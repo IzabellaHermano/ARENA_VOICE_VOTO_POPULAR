@@ -509,12 +509,53 @@ grant execute on function public.reconcile_results to authenticated;
 -- ----------------------------------------------------------------------------
 -- 8. REALTIME (PUBLICAÇÃO SELETIVA)
 -- ----------------------------------------------------------------------------
--- Importante: votes NUNCA é publicada no Realtime para proteger os votantes
-alter publication supabase_realtime drop table if exists public.votes;
-alter publication supabase_realtime add table public.events;
-alter publication supabase_realtime add table public.projects;
-alter publication supabase_realtime add table public.rounds;
-alter publication supabase_realtime add table public.results;
+
+-- A tabela votes não será publicada no Realtime.
+-- Os resultados agregados serão atualizados pela tabela results.
+
+do $$
+begin
+    if not exists (
+        select 1
+        from pg_publication_tables
+        where pubname = 'supabase_realtime'
+          and schemaname = 'public'
+          and tablename = 'events'
+    ) then
+        alter publication supabase_realtime add table public.events;
+    end if;
+
+    if not exists (
+        select 1
+        from pg_publication_tables
+        where pubname = 'supabase_realtime'
+          and schemaname = 'public'
+          and tablename = 'projects'
+    ) then
+        alter publication supabase_realtime add table public.projects;
+    end if;
+
+    if not exists (
+        select 1
+        from pg_publication_tables
+        where pubname = 'supabase_realtime'
+          and schemaname = 'public'
+          and tablename = 'rounds'
+    ) then
+        alter publication supabase_realtime add table public.rounds;
+    end if;
+
+    if not exists (
+        select 1
+        from pg_publication_tables
+        where pubname = 'supabase_realtime'
+          and schemaname = 'public'
+          and tablename = 'results'
+    ) then
+        alter publication supabase_realtime add table public.results;
+    end if;
+end;
+$$;
 
 -- ----------------------------------------------------------------------------
 -- 9. DADOS INICIAIS DE HOMOLOGAÇÃO (EVENTO E PROJETOS DA ARENA)
