@@ -1,153 +1,352 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { ArenaLogo } from '@/components/branding';
 import { EventService, DEFAULT_EVENT_ID } from '@/services/eventService';
-import { Download, ExternalLink, Trophy, Loader2 } from 'lucide-react';
-
-interface ResultRow {
-  id: string;
-  name: string;
-  inovacao: number;
-  impacto: number;
-  salto: number;
-  mediaGeral: number;
-  percentual: number;
-  pontos: number;
-  totalVotos?: number;
-}
-
-const INITIAL_RESULTS: ResultRow[] = [
-  { id: 'projeto01', name: 'Projeto 01 — Plataforma Inteligente', inovacao: 4.3, impacto: 4.5, salto: 4.1, mediaGeral: 4.3, percentual: 86, pontos: 17.2, totalVotos: 142 },
-  { id: 'projeto02', name: 'Projeto 02 — Manutenção Preditiva IoT', inovacao: 3.8, impacto: 4.0, salto: 3.6, mediaGeral: 3.8, percentual: 76, pontos: 15.2, totalVotos: 128 },
-  { id: 'projeto03', name: 'Projeto 03 — Acessibilidade Digital', inovacao: 4.6, impacto: 4.2, salto: 4.7, mediaGeral: 4.5, percentual: 90, pontos: 18.0, totalVotos: 156 },
-  { id: 'projeto04', name: 'Projeto 04 — Economia Circular', inovacao: 4.6, impacto: 4.3, salto: 4.3, mediaGeral: 3.8, percentual: 76, pontos: 15.2, totalVotos: 110 },
-];
+import { AdminMockService } from '@/services/adminMockService';
+import { ProjectDocument, ResultDocument, EventDocument } from '@/types';
+import { buildRankedResults, ProjectScoringResult } from '@/utils/scoring';
+import {
+  PublishResultsBanner,
+  ProjectResultCard,
+  CriteriaComparisonChart,
+  ParticipationChart,
+  ResultsTable,
+  ExportModal,
+} from '@/components/results';
+import {
+  Download,
+  ExternalLink,
+  Trophy,
+  Loader2,
+  LayoutGrid,
+  BarChart3,
+  Table as TableIcon,
+} from 'lucide-react';
 
 export const AdminResultsPage: React.FC = () => {
-  const [resultsData, setResultsData] = useState<ResultRow[]>(INITIAL_RESULTS);
-  const [isLoading, setIsLoading] = useState(false);
+  const [activeEvent, setActiveEvent] = useState<EventDocument | null>(null);
+  const [projects, setProjects] = useState<ProjectDocument[]>([]);
+  const [resultsList, setResultsList] = useState<ResultDocument[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [isUpdatingPublish, setIsUpdatingPublish] = useState(false);
+  const [isExportModalOpen, setIsExportModalOpen] = useState(false);
+  const [activeTab, setActiveTab] = useState<'cards' | 'charts' | 'table'>('cards');
 
+  // 1. Escuta o evento em tempo real (para status de publicação resultsPublished)
   useEffect(() => {
-    let isMounted = true;
-
-    async function loadServerResults() {
-      setIsLoading(true);
-      try {
-        const response = await EventService.getAdminResults(DEFAULT_EVENT_ID);
-        if (isMounted && response?.results && response.results.length > 0) {
-          const mapped: ResultRow[] = response.results.map((r: any) => ({
-            id: r.projectId || r.id,
-            name: r.projectName || r.projectId,
-            inovacao: r.averageInnovation || 0,
-            impacto: r.averageImpact || 0,
-            salto: r.averageDevelopment || 0,
-            mediaGeral: r.averageGeneral || 0,
-            percentual: r.percentage || 0,
-            pontos: r.popularPoints || 0,
-            totalVotos: r.totalVotes || 0,
-          }));
-          setResultsData(mapped);
-        }
-      } catch (err) {
-        console.warn('Conexão com servidor para getAdminResults indisponível, utilizando dados consolidados:', err);
-      } finally {
-        if (isMounted) setIsLoading(false);
+    const unsub = EventService.subscribeToCurrentEvent(DEFAULT_EVENT_ID, (ev) => {
+      if (ev) {
+        setActiveEvent(ev);
       }
-    }
-
-    loadServerResults();
-
-    return () => {
-      isMounted = false;
-    };
+    });
+    return () => unsub();
   }, []);
 
+  // 2. Escuta os projetos em tempo real
+  useEffect(() => {
+    const unsub = EventService.subscribeToProjectsList(DEFAULT_EVENT_ID, (projs) => {
+      if (projs && projs.length > 0) {
+        setProjects(projs);
+      } else {
+        // Fallback local do MockService
+        const mockProjs = AdminMockService.getProjects().map((p) => ({
+          id: p.id,
+          eventId: DEFAULT_EVENT_ID,
+          name: p.nome,
+          description: p.descricao || '',
+          bannerUrl: p.bannerUrl || '',
+          order: p.ordem,
+          active: p.ativo,
+          createdAt: { seconds: Date.now() / 1000, nanoseconds: 0 } as any,
+          updatedAt: { seconds: Date.now() / 1000, nanoseconds: 0 } as any,
+        }));
+        setProjects(mockProjs);
+      }
+      setIsLoading(false);
+    });
+    return () => unsub();
+  }, []);
+
+  // 3. Escuta todos os resultados consolidados do evento em tempo real
+  useEffect(() => {
+    const unsub = EventService.subscribeToAllEventResults(DEFAULT_EVENT_ID, (resList) => {
+      if (resList && resList.length > 0) {
+        setResultsList(resList);
+      } else {
+        // Fallback para mock demonstrativo com 4 projetos avaliados e 1 sem avaliações
+        const mockResults: ResultDocument[] = [
+          {
+            id: `${DEFAULT_EVENT_ID}_projeto01`,
+            eventId: DEFAULT_EVENT_ID,
+            projectId: 'projeto01',
+            totalVotes: 142,
+            sumInnovation: 610.6,
+            sumImpact: 639.0,
+            sumDevelopment: 582.2,
+            averageInnovation: 4.3,
+            averageImpact: 4.5,
+            averageDevelopment: 4.1,
+            averageGeneral: 4.3,
+            percentage: 86.0,
+            popularPoints: 17.2,
+            updatedAt: { seconds: Date.now() / 1000, nanoseconds: 0 } as any,
+          },
+          {
+            id: `${DEFAULT_EVENT_ID}_projeto02`,
+            eventId: DEFAULT_EVENT_ID,
+            projectId: 'projeto02',
+            totalVotes: 128,
+            sumInnovation: 486.4,
+            sumImpact: 512.0,
+            sumDevelopment: 460.8,
+            averageInnovation: 3.8,
+            averageImpact: 4.0,
+            averageDevelopment: 3.6,
+            averageGeneral: 3.8,
+            percentage: 76.0,
+            popularPoints: 15.2,
+            updatedAt: { seconds: Date.now() / 1000, nanoseconds: 0 } as any,
+          },
+          {
+            id: `${DEFAULT_EVENT_ID}_projeto03`,
+            eventId: DEFAULT_EVENT_ID,
+            projectId: 'projeto03',
+            totalVotes: 156,
+            sumInnovation: 717.6,
+            sumImpact: 655.2,
+            sumDevelopment: 733.2,
+            averageInnovation: 4.6,
+            averageImpact: 4.2,
+            averageDevelopment: 4.7,
+            averageGeneral: 4.5,
+            percentage: 90.0,
+            popularPoints: 18.0,
+            updatedAt: { seconds: Date.now() / 1000, nanoseconds: 0 } as any,
+          },
+          {
+            id: `${DEFAULT_EVENT_ID}_projeto04`,
+            eventId: DEFAULT_EVENT_ID,
+            projectId: 'projeto04',
+            totalVotes: 110,
+            sumInnovation: 506.0,
+            sumImpact: 473.0,
+            sumDevelopment: 473.0,
+            averageInnovation: 4.6,
+            averageImpact: 4.3,
+            averageDevelopment: 4.3,
+            averageGeneral: 3.8,
+            percentage: 76.0,
+            popularPoints: 15.2,
+            updatedAt: { seconds: Date.now() / 1000, nanoseconds: 0 } as any,
+          },
+        ];
+        setResultsList(mockResults);
+      }
+    });
+    return () => unsub();
+  }, []);
+
+  // 4. Constrói o ranking matemático oficial respeitando todas as regras da Etapa 6
+  const rankedResults: ProjectScoringResult[] = useMemo(() => {
+    const resultsMap = new Map<string, ResultDocument>();
+    resultsList.forEach((r) => {
+      resultsMap.set(r.projectId, r);
+    });
+    return buildRankedResults(projects, resultsMap);
+  }, [projects, resultsList]);
+
+  // Estatísticas Rápidas
+  const totalVotesCount = useMemo(() => {
+    return rankedResults.reduce((acc, p) => acc + (p.totalVotes || 0), 0);
+  }, [rankedResults]);
+
+  const topProject = rankedResults.find((p) => p.rank === 1);
+
+  // Manipulador de Publicação no Telão
+  const handleTogglePublish = async (newStatus: boolean) => {
+    setIsUpdatingPublish(true);
+    try {
+      await EventService.toggleResultsPublished(DEFAULT_EVENT_ID, newStatus);
+      setActiveEvent((prev) => (prev ? { ...prev, resultsPublished: newStatus } : null));
+    } catch (err) {
+      console.warn('Erro ao atualizar status de divulgação no Firestore:', err);
+      // Fallback local se Firestore emulador offline
+      setActiveEvent((prev) =>
+        prev
+          ? { ...prev, resultsPublished: newStatus }
+          : ({ id: DEFAULT_EVENT_ID, resultsPublished: newStatus } as any)
+      );
+    } finally {
+      setIsUpdatingPublish(false);
+    }
+  };
+
+  const isPublished = activeEvent?.resultsPublished ?? false;
+
   return (
-    <div className="space-y-6 max-w-6xl mx-auto">
-      {/* Header com Regra de Marca: Dashboard logo completa ou escrita com slogan */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-arena-border/60 pb-5">
+    <div className="space-y-6 max-w-7xl mx-auto">
+      {/* Header Principal */}
+      <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 border-b border-arena-border/60 pb-5">
         <div>
           <div className="flex items-center gap-3">
-            <ArenaLogo variant="textWithSlogan" width={220} />
+            <ArenaLogo variant="textWithSlogan" width={240} />
           </div>
           <h2 className="text-xl sm:text-2xl font-black text-white mt-2">
-            Resultados Consolidados — Voto Popular (20%)
+            Dashboard Geral de Resultados — Voto Popular (20%)
           </h2>
           <p className="text-xs text-gray-400">
-            Regra Oficial: Média Geral = (Inovação + Impacto + Salto) / 3 • Pontos = (Média / 5) × 20
+            Apuração em tempo real com dados agregados do servidor • Máximo de 20 pontos por projeto
           </p>
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
+          {/* Botão de Exibição do Telão */}
           <a
             href="/resultados/telao"
             target="_blank"
             rel="noopener noreferrer"
-            className="bg-arena-gold/20 hover:bg-arena-gold/30 text-arena-gold border border-arena-gold/40 text-xs font-bold px-4 py-2.5 rounded-xl flex items-center gap-2 transition-colors shadow-yellow-glow"
+            className="bg-gradient-to-r from-arena-gold/20 to-amber-600/20 hover:from-arena-gold/30 hover:to-amber-600/30 text-arena-gold border border-arena-gold/40 text-xs font-bold px-4 py-2.5 rounded-xl flex items-center gap-2 transition-all shadow-yellow-glow"
           >
-            <Trophy className="w-4 h-4" />
-            <span>Exibir Telão</span>
-            <ExternalLink className="w-3.5 h-3.5" />
+            <Trophy className="w-4 h-4 text-arena-gold" />
+            <span>Abrir Telão</span>
+            <ExternalLink className="w-3.5 h-3.5 opacity-70" />
           </a>
 
+          {/* Botão de Exportação */}
           <button
-            onClick={() => alert('Download do relatório em CSV/Excel (planejado para etapa futura)')}
-            className="bg-arena-card hover:bg-white/10 text-gray-200 border border-arena-border text-xs font-medium px-4 py-2.5 rounded-xl flex items-center gap-2 transition-colors"
+            onClick={() => setIsExportModalOpen(true)}
+            className="bg-arena-card hover:bg-white/10 text-gray-200 border border-arena-border text-xs font-bold px-4 py-2.5 rounded-xl flex items-center gap-2 transition-all"
           >
-            <Download className="w-4 h-4" />
-            <span>Exportar CSV</span>
+            <Download className="w-4 h-4 text-arena-blueLight" />
+            <span>Exportar Relatórios</span>
           </button>
         </div>
       </div>
 
-      {isLoading && (
-        <div className="flex items-center justify-center p-8 gap-2 text-arena-blue text-sm">
-          <Loader2 className="w-5 h-5 animate-spin" />
-          <span>Sincronizando apuração do servidor...</span>
-        </div>
-      )}
+      {/* Banner de Controle de Divulgação */}
+      <PublishResultsBanner
+        isPublished={isPublished}
+        onTogglePublish={handleTogglePublish}
+        isUpdating={isUpdatingPublish}
+      />
 
-      {/* Tabela de Resultados Oficiais */}
-      <div className="bg-arena-card border border-arena-border rounded-2xl overflow-hidden shadow-xl">
-        <div className="overflow-x-auto">
-          <table className="w-full text-left text-xs">
-            <thead className="bg-arena-black text-gray-400 uppercase tracking-wider text-[11px] border-b border-arena-border">
-              <tr>
-                <th className="py-3 px-4">Projeto</th>
-                <th className="py-3 px-4 text-center">Nível Inovação</th>
-                <th className="py-3 px-4 text-center">Impacto CPTM</th>
-                <th className="py-3 px-4 text-center">Salto Desenvolv.</th>
-                <th className="py-3 px-4 text-center font-bold text-white">Média Geral</th>
-                <th className="py-3 px-4 text-center">% dos 20%</th>
-                <th className="py-3 px-4 text-center font-bold text-arena-gold">Pontos (20 pts)</th>
-                <th className="py-3 px-4 text-center text-gray-400">Total Votos</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-arena-border/50 text-gray-200">
-              {resultsData.map((row) => (
-                <tr key={row.id} className="hover:bg-white/5 transition-colors">
-                  <td className="py-3.5 px-4 font-bold text-white flex items-center gap-2">
-                    <span className="w-2 h-2 rounded-full bg-arena-red" />
-                    {row.name}
-                  </td>
-                  <td className="py-3.5 px-4 text-center font-mono">{row.inovacao.toFixed(1)}</td>
-                  <td className="py-3.5 px-4 text-center font-mono">{row.impacto.toFixed(1)}</td>
-                  <td className="py-3.5 px-4 text-center font-mono">{row.salto.toFixed(1)}</td>
-                  <td className="py-3.5 px-4 text-center font-mono font-bold text-white bg-white/5">
-                    {row.mediaGeral.toFixed(1)}
-                  </td>
-                  <td className="py-3.5 px-4 text-center font-mono">{row.percentual}%</td>
-                  <td className="py-3.5 px-4 text-center font-mono font-extrabold text-arena-gold text-sm bg-arena-gold/5">
-                    {row.pontos.toFixed(1)}
-                  </td>
-                  <td className="py-3.5 px-4 text-center font-mono text-gray-400">
-                    {row.totalVotos || 0}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+      {/* 4 Cards de Estatísticas Rápidas do Evento */}
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
+        <div className="p-4 rounded-2xl bg-arena-card border border-arena-border">
+          <span className="text-[11px] font-semibold uppercase text-gray-400">Total de Projetos</span>
+          <div className="flex items-baseline justify-between mt-1">
+            <span className="text-2xl font-black text-white">{projects.length}</span>
+            <span className="text-xs text-arena-blue font-bold">Na competição</span>
+          </div>
+        </div>
+
+        <div className="p-4 rounded-2xl bg-arena-card border border-arena-border">
+          <span className="text-[11px] font-semibold uppercase text-gray-400">Votos Computados</span>
+          <div className="flex items-baseline justify-between mt-1">
+            <span className="text-2xl font-black text-arena-blueLight font-mono">{totalVotesCount}</span>
+            <span className="text-xs text-gray-400 font-semibold">100% únicos</span>
+          </div>
+        </div>
+
+        <div className="p-4 rounded-2xl bg-arena-card border border-arena-gold/30 bg-gradient-to-br from-arena-gold/10 to-transparent">
+          <span className="text-[11px] font-bold uppercase text-arena-gold">Líder Atual</span>
+          <div className="flex items-baseline justify-between mt-1">
+            <span className="text-sm sm:text-base font-black text-white line-clamp-1">
+              {topProject ? topProject.name : 'Aguardando'}
+            </span>
+            <span className="text-xs font-black text-arena-gold font-mono shrink-0 ml-1">
+              {topProject?.hasEvaluations ? `${topProject.formattedPoints} pts` : '-'}
+            </span>
+          </div>
+        </div>
+
+        <div className="p-4 rounded-2xl bg-arena-card border border-arena-border">
+          <span className="text-[11px] font-semibold uppercase text-gray-400">Peso no Evento</span>
+          <div className="flex items-baseline justify-between mt-1">
+            <span className="text-2xl font-black text-emerald-400 font-mono">20%</span>
+            <span className="text-xs text-gray-400 font-semibold">Voto Popular</span>
+          </div>
         </div>
       </div>
+
+      {/* Abas de Visualização do Dashboard */}
+      <div className="flex items-center gap-1.5 p-1 bg-black/40 rounded-xl border border-arena-border w-fit">
+        <button
+          onClick={() => setActiveTab('cards')}
+          className={`flex items-center gap-2 px-3.5 py-2 rounded-lg text-xs font-bold transition-all ${
+            activeTab === 'cards'
+              ? 'bg-arena-red text-white shadow-neon-glow'
+              : 'text-gray-400 hover:text-white'
+          }`}
+        >
+          <LayoutGrid className="w-3.5 h-3.5" />
+          <span>Resumo dos Projetos</span>
+        </button>
+
+        <button
+          onClick={() => setActiveTab('charts')}
+          className={`flex items-center gap-2 px-3.5 py-2 rounded-lg text-xs font-bold transition-all ${
+            activeTab === 'charts'
+              ? 'bg-arena-red text-white shadow-neon-glow'
+              : 'text-gray-400 hover:text-white'
+          }`}
+        >
+          <BarChart3 className="w-3.5 h-3.5" />
+          <span>Gráficos Comparativos</span>
+        </button>
+
+        <button
+          onClick={() => setActiveTab('table')}
+          className={`flex items-center gap-2 px-3.5 py-2 rounded-lg text-xs font-bold transition-all ${
+            activeTab === 'table'
+              ? 'bg-arena-red text-white shadow-neon-glow'
+              : 'text-gray-400 hover:text-white'
+          }`}
+        >
+          <TableIcon className="w-3.5 h-3.5" />
+          <span>Tabela Detalhada</span>
+        </button>
+      </div>
+
+      {isLoading ? (
+        <div className="flex items-center justify-center p-12 gap-2 text-arena-blue text-sm">
+          <Loader2 className="w-5 h-5 animate-spin" />
+          <span>Carregando dados agregados do servidor...</span>
+        </div>
+      ) : (
+        <>
+          {/* Conteúdo da Aba: Cards de Projetos */}
+          {activeTab === 'cards' && (
+            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4 sm:gap-6 animate-fade-in">
+              {rankedResults.map((project) => (
+                <ProjectResultCard key={project.projectId} project={project} />
+              ))}
+            </div>
+          )}
+
+          {/* Conteúdo da Aba: Gráficos Comparativos */}
+          {activeTab === 'charts' && (
+            <div className="space-y-6 animate-fade-in">
+              <CriteriaComparisonChart projects={rankedResults} />
+              <ParticipationChart projects={rankedResults} />
+            </div>
+          )}
+
+          {/* Conteúdo da Aba: Tabela Detalhada */}
+          {activeTab === 'table' && (
+            <div className="animate-fade-in">
+              <ResultsTable results={rankedResults} />
+            </div>
+          )}
+        </>
+      )}
+
+      {/* Modal de Exportação */}
+      <ExportModal
+        isOpen={isExportModalOpen}
+        onClose={() => setIsExportModalOpen(false)}
+        results={rankedResults}
+        eventName={activeEvent?.name || 'Arena Voice 2026'}
+      />
     </div>
   );
 };

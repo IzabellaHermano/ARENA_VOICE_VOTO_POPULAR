@@ -31,8 +31,10 @@ export const AppRoutes: React.FC = () => {
         <Route path="/confirmacao" element={<ConfirmationPage />} />
       </Route>
 
-      {/* Rota do Telão (Sem sidebar administrativa, visão limpa full-screen) */}
+      {/* Rota do Telão e Ranking (Sem sidebar administrativa, visão limpa full-screen) */}
       <Route path="/resultados/telao" element={<BigScreenRankingPage />} />
+      <Route path="/telao" element={<BigScreenRankingPage />} />
+      <Route path="/ranking" element={<BigScreenRankingPage />} />
 
       {/* Rota de Login Administrativo */}
       <Route path="/admin/login" element={<AdminLoginPage />} />

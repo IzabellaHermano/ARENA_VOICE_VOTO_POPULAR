@@ -6,6 +6,8 @@ import {
   orderBy,
   onSnapshot,
   getDoc,
+  updateDoc,
+  serverTimestamp,
   Unsubscribe,
 } from 'firebase/firestore';
 import { httpsCallable } from 'firebase/functions';
@@ -159,6 +161,47 @@ export const EventService = {
         if (onError) onError(error);
       }
     );
+  },
+
+  /**
+   * Monitora em tempo real TODOS os resultados consolidados do evento (Etapa 6)
+   * Utiliza agregação no Firestore: não carrega votos brutos no navegador!
+   */
+  subscribeToAllEventResults(
+    eventId: string,
+    onUpdate: (results: ResultDocument[]) => void,
+    onError?: (err: Error) => void
+  ): Unsubscribe {
+    const resultsQuery = query(
+      collection(db, 'results'),
+      where('eventId', '==', eventId)
+    );
+
+    return onSnapshot(
+      resultsQuery,
+      (snapshot) => {
+        const list: ResultDocument[] = [];
+        snapshot.forEach((d) => {
+          list.push({ id: d.id, ...(d.data() as ResultDocument) });
+        });
+        onUpdate(list);
+      },
+      (error) => {
+        console.warn('Erro ao escutar todos os resultados em tempo real:', error);
+        if (onError) onError(error);
+      }
+    );
+  },
+
+  /**
+   * Alterna a autorização de divulgação pública dos resultados no telão (Etapa 6)
+   */
+  async toggleResultsPublished(eventId: string, published: boolean): Promise<void> {
+    const eventRef = doc(db, 'events', eventId);
+    await updateDoc(eventRef, {
+      resultsPublished: published,
+      updatedAt: serverTimestamp(),
+    });
   },
 
   /**
