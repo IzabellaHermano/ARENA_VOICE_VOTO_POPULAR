@@ -4,9 +4,10 @@ import { Routes, Route, Navigate } from 'react-router-dom';
 // Layouts
 import PublicLayout from '@/components/layout/PublicLayout';
 import AdminLayout from '@/components/layout/AdminLayout';
+import ProtectedRoute from '@/components/auth/ProtectedRoute';
 
 // Public Pages
-import HomePage from '@/pages/public/HomePage';
+import PublicVotingPage from '@/pages/public/PublicVotingPage';
 import WaitingPage from '@/pages/public/WaitingPage';
 import EvaluationPage from '@/pages/public/EvaluationPage';
 import ConfirmationPage from '@/pages/public/ConfirmationPage';
@@ -20,43 +21,66 @@ import AdminProjectsPage from '@/pages/admin/AdminProjectsPage';
 import AdminRoundPage from '@/pages/admin/AdminRoundPage';
 import AdminResultsPage from '@/pages/admin/AdminResultsPage';
 import AdminSettingsPage from '@/pages/admin/AdminSettingsPage';
+import AdminUsersPage from '@/pages/admin/AdminUsersPage';
+
+import { DEFAULT_EVENT_ID } from '@/services/eventService';
 
 export const AppRoutes: React.FC = () => {
   return (
     <Routes>
-      {/* Rotas Públicas com PublicLayout */}
+      {/* 1. Nova Rota Principal: LOGIN ADMINISTRATIVO (/) */}
+      <Route path="/" element={<AdminLoginPage />} />
+      <Route path="/admin/login" element={<Navigate to="/" replace />} />
+
+      {/* 2. Rotas Públicas de Votação com PublicLayout */}
       <Route element={<PublicLayout />}>
-        <Route path="/" element={<HomePage />} />
-        <Route path="/votar" element={<HomePage />} />
+        {/* Entrada pública por evento e avaliação por projeto */}
+        <Route path="/votar/:eventId" element={<PublicVotingPage />} />
+        <Route path="/votar/:eventId/:projectId" element={<PublicVotingPage />} />
+
+        {/* Rotas de compatibilidade com versões anteriores e atalhos de QR Code */}
+        <Route path="/votar" element={<Navigate to={`/votar/${DEFAULT_EVENT_ID}`} replace />} />
         <Route path="/aguardando" element={<WaitingPage />} />
         <Route path="/avaliar" element={<EvaluationPage />} />
         <Route path="/confirmacao" element={<ConfirmationPage />} />
       </Route>
 
-      {/* Rotas de Projeção em Telão (16:9 Fullscreen sem sidebar) */}
+      {/* 3. Rotas de Projeção em Telão e QR Code (16:9 Fullscreen sem sidebar) */}
       <Route path="/telao" element={<BigScreenPresentationPage />} />
       <Route path="/qrcode" element={<BigScreenQRCodePage />} />
       <Route path="/telao/qrcode" element={<BigScreenQRCodePage />} />
       <Route path="/resultados/telao" element={<BigScreenRankingPage />} />
       <Route path="/ranking" element={<BigScreenRankingPage />} />
 
-      {/* Rota de Login Administrativo */}
-      <Route path="/admin/login" element={<AdminLoginPage />} />
-
-      {/* Rotas Administrativas com AdminLayout */}
-      <Route path="/admin" element={<AdminLayout />}>
+      {/* 4. Rotas Administrativas Protegidas com AdminLayout */}
+      <Route
+        path="/admin"
+        element={
+          <ProtectedRoute>
+            <AdminLayout />
+          </ProtectedRoute>
+        }
+      >
         <Route index element={<Navigate to="/admin/projetos" replace />} />
         <Route path="projetos" element={<AdminProjectsPage />} />
-        <Route path="rodada" element={<AdminRoundPage />} />
+        <Route path="votacao" element={<AdminRoundPage />} />
+        <Route path="rodada" element={<Navigate to="/admin/votacao" replace />} />
         <Route path="resultados" element={<AdminResultsPage />} />
+        <Route
+          path="usuarios"
+          element={
+            <ProtectedRoute requiredRole="superadmin">
+              <AdminUsersPage />
+            </ProtectedRoute>
+          }
+        />
         <Route path="configuracoes" element={<AdminSettingsPage />} />
       </Route>
 
-      {/* Rota Fallback */}
+      {/* 5. Fallback para rota principal */}
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
   );
 };
 
 export default AppRoutes;
-

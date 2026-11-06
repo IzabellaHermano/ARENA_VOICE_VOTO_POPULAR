@@ -175,11 +175,13 @@ export const VotingProvider: React.FC<VotingProviderProps> = ({ children }) => {
   // O público NÃO deve atualizar a página para receber o novo projeto!
   useEffect(() => {
     // Aplica apenas para as rotas do fluxo público
-    const publicPaths = ['/votar', '/aguardando', '/avaliar', '/confirmacao'];
-    if (!publicPaths.includes(location.pathname)) return;
+    const isPublicVotingPath =
+      location.pathname === '/votar' ||
+      location.pathname === '/aguardando' ||
+      location.pathname === '/avaliar' ||
+      location.pathname === '/confirmacao';
 
-    // Se estiver na Home (/ ou /votar), permite navegação inicial
-    if (location.pathname === '/' || location.pathname === '/votar') return;
+    if (!isPublicVotingPath) return;
 
     if (!currentRound || currentRound.status !== 'open') {
       // Sem rodada aberta ou rodada encerrada/em espera:

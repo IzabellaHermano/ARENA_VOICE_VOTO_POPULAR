@@ -18,6 +18,90 @@ Este documento registra o status de execução de cada uma das 9 etapas de desen
 - [x] **Etapa 9: Finalização, Fidelidade Visual, Simulação Ponta a Ponta e Homologação** (Concluída ✅)
 - [x] **Migração Arquitetural — Etapa 1: Auditoria Completa e Planejamento da Migração para Supabase** (Concluída ✅)
 - [x] **Migração Arquitetural — Etapa 2: Migração Completa do Firebase para Supabase** (Concluída e Homologada ✅)
+- [x] **Nova Arquitetura — Etapa 3: Nova Entrada do Sistema, Login e Gerenciamento de Administradores** (Concluída e Homologada ✅)
+
+---
+
+### Detalhamento da Nova Arquitetura — Etapa 3: Nova Entrada, Login e Gerenciamento de Administradores ✅
+
+#### 1. Nova Página Inicial e Login Administrativo (`/`)
+- A rota raiz `/` foi reestruturada para renderizar com exclusividade a tela de **Login Administrativo** ([`src/pages/admin/AdminLoginPage.tsx`](file:///c:/Users/IZABELLAA/Documents/ARENA_VOICE_VOTO_POPULAR/src/pages/admin/AdminLoginPage.tsx)).
+- Acesso à votação pública via raiz foi definitivamente eliminado; a página inicial nunca mais abre diretamente na avaliação pública.
+- Componentes e recursos da nova tela:
+  - Preservação da identidade visual oficial com logo completa (`ArenaLogo variant="complete"`) e mascote metálico sutil no plano de fundo.
+  - Campos institucionais: E-mail e Senha de acesso.
+  - Botão de alternância de visibilidade da senha com ícones `Eye` / `EyeOff`.
+  - Botão de submissão estilizado *"Entrar no Painel"*.
+  - Modal integrado de **Recuperação de Senha** ("Esqueceu a senha?") que dispara `supabase.auth.resetPasswordForEmail()`.
+  - Tratamento responsivo e feedbacks visuais em caixas de alerta vermelha (erro) e verde (sucesso).
+  - Redirecionamento automático para o painel administrativo caso o usuário já possua sessão ativa.
+
+#### 2. Reorganização das Rotas do Sistema ([`src/routes/index.tsx`](file:///c:/Users/IZABELLAA/Documents/ARENA_VOICE_VOTO_POPULAR/src/routes/index.tsx))
+- `/` — Login administrativo principal.
+- `/admin` — Painel administrativo protegido por autenticação e RBAC.
+- `/admin/usuarios` — Gerenciamento de administradores (acesso restrito ao `superadmin`).
+- `/admin/projetos` — Gerenciamento e ordenação de projetos concorrentes.
+- `/admin/votacao` — Controle de abertura, encerramento e cronômetro da rodada.
+- `/admin/resultados` — Métricas em tempo real, pontuação oficial de até 20 pontos e ranking.
+- `/votar/:eventId` — Entrada pública para votação do evento com sala de espera dinâmica.
+- `/votar/:eventId/:projectId` — Avaliação do projeto liberado em tempo real pelo apresentador.
+- *Aliases de compatibilidade:* `/admin/login` $\rightarrow$ `/`; `/admin/rodada` $\rightarrow$ `/admin/votacao`; `/votar` $\rightarrow$ `/votar/arena-voice-2025`; `/telao`, `/qrcode`, `/ranking` mantidos.
+
+#### 3. Cadastro e Gerenciamento de Administradores ([`src/pages/admin/AdminUsersPage.tsx`](file:///c:/Users/IZABELLAA/Documents/ARENA_VOICE_VOTO_POPULAR/src/pages/admin/AdminUsersPage.tsx))
+- Interface visual dedicada para superadministradores com métricas de equipe (Total, Superadmins, Admins, Operadores).
+- Modal de cadastro com validação de campos obrigatórios:
+  - **Nome Completo**
+  - **E-mail Institucional**
+  - **Senha Inicial de Acesso** (com valor padrão provisório de conveniência)
+  - **Nível de Acesso (RBAC):**
+    - `superadmin`: Gestão completa de usuários, configurações, projetos e votação.
+    - `admin`: Gerenciamento de projetos e controle operacional das votações.
+    - `operator`: Acompanhamento ao vivo e visualização de resultados sem privilégios de escrita.
+  - **Situação da Conta:** Switch Ativo / Inativo.
+- Tabela com listagem, busca instantânea, filtro por papel, alternância de ativação (`Power`) e exclusão de contas.
+- Proteção ativa contra auto-exclusão e auto-desativação da conta do superadministrador conectado.
+
+#### 4. Segurança Server-Side com Edge Function e RLS
+- **Edge Function Supabase ([`supabase/functions/manage-admin-user/index.ts`](file:///c:/Users/IZABELLAA/Documents/ARENA_VOICE_VOTO_POPULAR/supabase/functions/manage-admin-user/index.ts)):**
+  - Validação estrita do token JWT no cabeçalho `Authorization`.
+  - Verificação de perfil no servidor: somente chamadores com `role = 'superadmin'` e `active = true` em `public.admin_profiles` têm acesso concedido.
+  - Utilização da chave sensível `SUPABASE_SERVICE_ROLE_KEY` **exclusivamente** no ambiente isolado da função backend.
+  - Operações atômicas de criação (`auth.admin.createUser`), atualização, alternância de status e exclusão (`auth.admin.deleteUser`).
+- **Procedure PL/pgSQL ([`supabase/schema.sql`](file:///c:/Users/IZABELLAA/Documents/ARENA_VOICE_VOTO_POPULAR/supabase/schema.sql#L442)):**
+  - Função `public.admin_manage_profile` com `SECURITY DEFINER` e `SET search_path = public, pg_temp` validando `public.is_superadmin()`.
+- **Row Level Security (RLS):**
+  - Acesso de leitura permitido apenas a administradores autenticados (`public.is_admin()`).
+  - Escrita direta, inserção e exclusão restritas exclusivamente a superadministradores (`public.is_superadmin()`).
+- O frontend consome apenas `VITE_SUPABASE_URL` e a chave pública `anon`.
+
+#### 5. Controle de Sessão e Rotas Protegidas ([`src/components/auth/ProtectedRoute.tsx`](file:///c:/Users/IZABELLAA/Documents/ARENA_VOICE_VOTO_POPULAR/src/components/auth/ProtectedRoute.tsx))
+- `AdminAuthProvider` ([`src/contexts/AdminAuthContext.tsx`](file:///c:/Users/IZABELLAA/Documents/ARENA_VOICE_VOTO_POPULAR/src/contexts/AdminAuthContext.tsx)): Gerencia persistência de sessão em `sessionStorage` e `localStorage`, fornecendo helpers de permissão (`canManageUsers`, `canManageProjects`, `canControlRounds`).
+- Componente `ProtectedRoute`:
+  - Se a sessão não estiver ativa, redireciona o usuário para `/` preservando o histórico de navegação.
+  - Se a rota exigir `requiredRole="superadmin"` e o usuário for `admin` ou `operator`, renderiza tela temátiva institucional de **Acesso Restrito ao Superadministrador** com botão de retorno seguro ao painel.
+  - Usuários desativados têm a sessão cancelada imediatamente com mensagem de bloqueio.
+
+#### 6. Experiência de Votação Pública ([`src/pages/public/PublicVotingPage.tsx`](file:///c:/Users/IZABELLAA/Documents/ARENA_VOICE_VOTO_POPULAR/src/pages/public/PublicVotingPage.tsx))
+- Rotas `/votar/:eventId` e `/votar/:eventId/:projectId` isoladas da navegação administrativa.
+- Transição automática: se a rodada estiver aberta, exibe o banner e critérios do projeto ativo; se fechada, exibe a sala de espera do evento com indicação de progresso.
+- Participantes que já votaram permanecem em feedback de agradecimento sem permitir submissões duplicadas.
+
+#### 7. Suíte de Testes Automatizada ([`scripts/testEtapa3Auth.mjs`](file:///c:/Users/IZABELLAA/Documents/ARENA_VOICE_VOTO_POPULAR/scripts/testEtapa3Auth.mjs))
+- Execução com **100% de aprovação (52 de 52 testes)**:
+  - [x] Rota raiz `/` abre o login administrativo.
+  - [x] Rota raiz `/` não abre mais a votação pública.
+  - [x] Presença de logo oficial, campos de login, alternador de senha e recuperação.
+  - [x] Rotas `/admin`, `/admin/usuarios`, `/admin/projetos`, `/admin/votacao`, `/admin/resultados`.
+  - [x] Rotas públicas `/votar/:eventId` e `/votar/:eventId/:projectId`.
+  - [x] Formulário de gestão de administradores com papéis `superadmin`, `admin`, `operator`.
+  - [x] Proteção contra auto-exclusão do superadmin.
+  - [x] Edge Function com verificação server-side e uso seguro de `service_role`.
+  - [x] Proteção RLS no banco de dados para `admin_profiles`.
+  - [x] `ProtectedRoute` com bloqueio não-autenticado e validação de perfil RBAC.
+  - [x] Não exposição de chaves privadas no frontend.
+- Compilação de produção (`npm run build`) concluída com **0 erros** de TypeScript.
+
+---
 
 ---
 

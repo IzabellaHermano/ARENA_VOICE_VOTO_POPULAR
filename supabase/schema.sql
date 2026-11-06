@@ -439,6 +439,70 @@ begin
 end;
 $$;
 
+-- 5.7 admin_manage_profile: Gestão segura de administradores (apenas superadmin)
+create or replace function public.admin_manage_profile(
+  p_action text, -- 'create', 'update', 'toggle_active', 'delete'
+  p_user_id uuid,
+  p_name text default null,
+  p_email text default null,
+  p_role text default null,
+  p_active boolean default null
+) returns json language plpgsql security definer set search_path = public, pg_temp as $$
+declare
+  v_caller_is_superadmin boolean;
+begin
+  -- 1. Verifica se quem chamou é superadmin ativo
+  v_caller_is_superadmin := public.is_superadmin();
+  if not v_caller_is_superadmin then
+    raise exception 'Acesso negado: Apenas superadministradores podem gerenciar perfis administrativos.';
+  end if;
+
+  -- 2. Impede auto-exclusão ou auto-desativação do superadmin
+  if p_user_id = auth.uid() and p_action in ('delete', 'toggle_active') then
+    if p_action = 'delete' or (p_action = 'toggle_active' and p_active = false) then
+      raise exception 'Operação inválida: Você não pode desativar ou excluir a sua própria conta de superadministrador.';
+    end if;
+  end if;
+
+  if p_action = 'create' or p_action = 'update' then
+    if p_name is null or trim(p_name) = '' then
+      raise exception 'O nome do administrador é obrigatório.';
+    end if;
+    if p_email is null or trim(p_email) = '' then
+      raise exception 'O e-mail do administrador é obrigatório.';
+    end if;
+    if p_role not in ('superadmin', 'admin', 'operator') then
+      raise exception 'Papel de acesso inválido: utilize superadmin, admin ou operator.';
+    end if;
+
+    insert into public.admin_profiles (id, name, email, role, active, updated_at)
+    values (p_user_id, trim(p_name), lower(trim(p_email)), p_role, coalesce(p_active, true), now())
+    on conflict (id) do update set
+      name = excluded.name,
+      email = excluded.email,
+      role = excluded.role,
+      active = coalesce(excluded.active, public.admin_profiles.active),
+      updated_at = now();
+
+    return json_build_object('success', true, 'action', p_action, 'id', p_user_id);
+
+  elsif p_action = 'toggle_active' then
+    update public.admin_profiles
+    set active = coalesce(p_active, not active), updated_at = now()
+    where id = p_user_id;
+
+    return json_build_object('success', true, 'action', 'toggle_active', 'id', p_user_id);
+
+  elsif p_action = 'delete' then
+    delete from public.admin_profiles where id = p_user_id;
+    return json_build_object('success', true, 'action', 'delete', 'id', p_user_id);
+
+  else
+    raise exception 'Ação desconhecida: %', p_action;
+  end if;
+end;
+$$;
+
 -- ----------------------------------------------------------------------------
 -- 6. ROW LEVEL SECURITY (RLS)
 -- ----------------------------------------------------------------------------
@@ -498,6 +562,7 @@ revoke all on function public.close_round from public;
 revoke all on function public.prepare_next_round from public;
 revoke all on function public.get_admin_results from public;
 revoke all on function public.reconcile_results from public;
+revoke all on function public.admin_manage_profile from public;
 
 grant execute on function public.submit_vote to authenticated, anon;
 grant execute on function public.open_round to authenticated;
@@ -505,6 +570,7 @@ grant execute on function public.close_round to authenticated;
 grant execute on function public.prepare_next_round to authenticated;
 grant execute on function public.get_admin_results to authenticated;
 grant execute on function public.reconcile_results to authenticated;
+grant execute on function public.admin_manage_profile to authenticated;
 
 -- ----------------------------------------------------------------------------
 -- 8. REALTIME (PUBLICAÇÃO SELETIVA)
@@ -572,3 +638,6 @@ values
   ('projeto04', 'arena-voice-2026', 'Projeto 04', 'Sustentabilidade e Economia Circular', 'Reaproveitamento avançado de componentes e gestão inteligente de resíduos industriais da frota.', 4, true, 'active')
 on conflict (id) do update set name = excluded.name, category = excluded.category, description = excluded.description;
 
+INSERT INTO public.admin_profiles (id, name, email, role, active)
+VALUES ('a71e8945-e60b-4896-be74-e64edc428e01', 'Administrador Arena Voice', 'admin@cptm.sp.gov.br', 'superadmin', true)
+ON CONFLICT (id) DO UPDATE SET active = true, role = 'superadmin';

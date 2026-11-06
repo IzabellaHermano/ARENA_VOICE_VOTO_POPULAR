@@ -133,6 +133,91 @@ export const AuthService = {
       }
     }
     sessionStorage.removeItem('arena_voice_admin_token');
+    localStorage.removeItem('arena_voice_admin_token');
+  },
+
+  /**
+   * Solicita redefinição de senha por e-mail via Supabase Auth
+   */
+  async resetPassword(email: string): Promise<void> {
+    const trimmed = email.trim().toLowerCase();
+    if (isSupabaseConfigured) {
+      const { error } = await supabase.auth.resetPasswordForEmail(trimmed, {
+        redirectTo: `${window.location.origin}/`,
+      });
+      if (error) {
+        throw new Error(`Falha ao enviar instruções de recuperação: ${error.message}`);
+      }
+      return;
+    }
+
+    // Fallback simulado
+    await new Promise((resolve) => setTimeout(resolve, 500));
+  },
+
+  /**
+   * Recupera a sessão administrativa atual validada
+   */
+  async getAdminSession(): Promise<AdminAuthResult | null> {
+    // 1. Tenta verificar sessão no Supabase Auth
+    if (isSupabaseConfigured) {
+      try {
+        const { data: sessionData } = await supabase.auth.getSession();
+        const user = sessionData.session?.user;
+        if (user && !user.is_anonymous) {
+          const { data: profile } = await supabase
+            .from('admin_profiles')
+            .select('id, name, email, role, active')
+            .eq('id', user.id)
+            .single();
+
+          if (profile && profile.active) {
+            return {
+              user: {
+                id: user.id,
+                uid: user.id,
+                email: user.email,
+                is_anonymous: false,
+              },
+              role: profile.role,
+              isAdmin: true,
+            };
+          } else if (profile && !profile.active) {
+            await this.signOut();
+            return null;
+          }
+        }
+      } catch (err) {
+        console.warn('Erro ao verificar sessão administrativa remota:', err);
+      }
+    }
+
+    // 2. Fallback de sessão armazenada no navegador (sessionStorage / localStorage)
+    const stored =
+      sessionStorage.getItem('arena_voice_admin_token') ||
+      localStorage.getItem('arena_voice_admin_token');
+
+    if (stored) {
+      try {
+        const parsed = JSON.parse(stored);
+        if (parsed.uid && parsed.role) {
+          return {
+            user: {
+              id: parsed.uid,
+              uid: parsed.uid,
+              email: parsed.email,
+              is_anonymous: false,
+            },
+            role: parsed.role,
+            isAdmin: true,
+          };
+        }
+      } catch {
+        // Ignora JSON corrompido
+      }
+    }
+
+    return null;
   },
 
   /**

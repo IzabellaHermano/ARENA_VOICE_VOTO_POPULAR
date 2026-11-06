@@ -1,5 +1,6 @@
 import React from 'react';
-import { Menu, ExternalLink, Trophy, ShieldCheck } from 'lucide-react';
+import { Menu, ExternalLink, Trophy, ShieldCheck, Shield, UserCheck } from 'lucide-react';
+import { useAdminAuth } from '@/hooks/useAdminAuth';
 
 export interface AdminHeaderProps {
   onToggleSidebar: () => void;
@@ -10,6 +11,8 @@ export const AdminHeader: React.FC<AdminHeaderProps> = ({
   onToggleSidebar,
   title = 'Arena Voice — Gestão em Tempo Real',
 }) => {
+  const { adminUser, role } = useAdminAuth();
+
   return (
     <header className="h-16 border-b border-arena-border bg-arena-card/60 backdrop-blur-md px-4 sm:px-6 flex items-center justify-between sticky top-0 z-30">
       <div className="flex items-center gap-3">
@@ -46,15 +49,35 @@ export const AdminHeader: React.FC<AdminHeaderProps> = ({
           <ExternalLink className="w-3 h-3" />
         </a>
 
-        {/* Admin Badge */}
-        <div className="hidden md:flex items-center gap-2 px-3 py-1 rounded-xl bg-arena-black border border-arena-border text-xs text-gray-300">
-          <ShieldCheck className="w-3.5 h-3.5 text-arena-green" />
-          <span className="font-semibold text-gray-200">Admin</span>
-        </div>
+        {/* Dynamic Admin Profile Badge */}
+        {role && (
+          <div className="hidden md:flex items-center gap-2 px-3 py-1 rounded-xl bg-arena-black border border-arena-border text-xs text-gray-300">
+            {role === 'superadmin' ? (
+              <>
+                <ShieldCheck className="w-3.5 h-3.5 text-arena-gold" />
+                <span className="font-semibold text-arena-gold">Superadmin</span>
+              </>
+            ) : role === 'admin' ? (
+              <>
+                <Shield className="w-3.5 h-3.5 text-arena-blue" />
+                <span className="font-semibold text-arena-blue">Admin</span>
+              </>
+            ) : (
+              <>
+                <UserCheck className="w-3.5 h-3.5 text-gray-400" />
+                <span className="font-semibold text-gray-300">Operador</span>
+              </>
+            )}
+            {adminUser?.name && (
+              <span className="text-[11px] text-gray-400 pl-1 border-l border-gray-700">
+                {adminUser.name}
+              </span>
+            )}
+          </div>
+        )}
       </div>
     </header>
   );
 };
 
 export default AdminHeader;
-

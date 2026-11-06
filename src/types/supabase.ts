@@ -81,7 +81,9 @@ export interface AdminProfileRow {
   email: string;
   role: 'superadmin' | 'admin' | 'operator';
   active: boolean;
-  created_at: string;
-  updated_at: string;
+  created_at?: string;
+  updated_at?: string;
 }
+
+export type AdminProfile = AdminProfileRow;
 
