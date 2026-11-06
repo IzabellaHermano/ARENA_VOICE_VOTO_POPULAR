@@ -1,0 +1,61 @@
+{
+  "migratedAt": "2026-11-06T16:29:52.691Z",
+  "event": {
+    "id": "arena-voice-2026",
+    "name": "Arena Voice 2026",
+    "description": "Competição oficial de inovação com voto popular em tempo real.",
+    "status": "active",
+    "results_published": false
+  },
+  "projectsCount": 4,
+  "projects": [
+    {
+      "id": "projeto01",
+      "event_id": "arena-voice-2026",
+      "name": "Projeto 01",
+      "category": "Plataforma Inteligente de Gestão",
+      "description": "Solução preditiva e em tempo real para otimização de mobilidade e eficiência energética na malha.",
+      "banner_url": "",
+      "image_url": "",
+      "order": 1,
+      "active": true,
+      "status": "active"
+    },
+    {
+      "id": "projeto02",
+      "event_id": "arena-voice-2026",
+      "name": "Projeto 02",
+      "category": "Manutenção Preditiva com IoT",
+      "description": "Sensores inteligentes embarcados para diagnóstico antecipado de falhas em trens e vias permanentes.",
+      "banner_url": "",
+      "image_url": "",
+      "order": 2,
+      "active": true,
+      "status": "active"
+    },
+    {
+      "id": "projeto03",
+      "event_id": "arena-voice-2026",
+      "name": "Projeto 03",
+      "category": "Acessibilidade Digital",
+      "description": "Ecossistema inclusivo multicanal com inteligência artificial para orientação de passageiros com deficiência.",
+      "banner_url": "",
+      "image_url": "",
+      "order": 3,
+      "active": true,
+      "status": "active"
+    },
+    {
+      "id": "projeto04",
+      "event_id": "arena-voice-2026",
+      "name": "Projeto 04",
+      "category": "Sustentabilidade e Economia Circular",
+      "description": "Reaproveitamento avançado de componentes e gestão inteligente de resíduos industriais da frota.",
+      "banner_url": "",
+      "image_url": "",
+      "order": 4,
+      "active": true,
+      "status": "active"
+    }
+  ]
+}

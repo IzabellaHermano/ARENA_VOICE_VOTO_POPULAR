@@ -15,7 +15,76 @@ Este documento registra o status de execução de cada uma das 9 etapas de desen
 - [x] **Etapa 6: Dashboard, Resultados e Ranking Oficial dos 20%** (Concluída e Homologada ✅)
 - [x] **Etapa 7: QR Code, Telão e Experiência em Tempo Real** (Concluída e Homologada ✅)
 - [x] **Etapa 8: Testes Completos, Segurança, Concorrência e Auditoria** (Concluída e Homologada ✅)
-- [x] **Etapa 9: Finalização, Fidelidade Visual, Simulação Ponta a Ponta e Homologação** (Concluída ✅ - Aguardando comando para deploy final)
+- [x] **Etapa 9: Finalização, Fidelidade Visual, Simulação Ponta a Ponta e Homologação** (Concluída ✅)
+- [x] **Migração Arquitetural — Etapa 1: Auditoria Completa e Planejamento da Migração para Supabase** (Concluída ✅)
+- [x] **Migração Arquitetural — Etapa 2: Migração Completa do Firebase para Supabase** (Concluída e Homologada ✅)
+
+---
+
+### Detalhamento da Migração Arquitetural — Etapa 2: Migração Completa para Supabase ✅
+
+#### 1. Diagnóstico e Resolução dos 4 Problemas Operacionais
+1. **Falha de registro dos votos:** No Firebase Spark (plano gratuito), as Cloud Functions v2 foram bloqueadas por exigência de faturamento Blaze. No Supabase, toda a lógica de submissão de votos foi portada para a procedure nativa PostgreSQL `submit_vote` (`SECURITY DEFINER`), eliminando custos e dependências externas de funções cloud.
+2. **Falta de sincronia na abertura de rodadas:** O painel administrativo capturava erro de permissão no Firestore e alterava apenas o estado React local. Com o Supabase, a chamada RPC atômica `open_round` atualiza a tabela `rounds` e `events`, emitindo broadcast instantâneo via Supabase Realtime para todos os navegadores conectados.
+3. **Votos não apareciam em tempo real:** Resolvido com transações atômicas na tabela `results` via `on conflict (id) do update`, com broadcast Realtime nativo na tabela `results` ($O(1)$ sem ler votos individuais).
+4. **Página inicial abrindo direto em `/avaliar`:** Corrigido o status inicial mock e do painel de `'aberta'` com 142 votos para `'aguardando'` com 0 votos. O público agora entra diretamente na tela de espera temática (`/aguardando`), transitando para `/avaliar` apenas quando o operador libera a rodada.
+
+#### 2. Estrutura do Banco de Dados PostgreSQL ([`supabase/schema.sql`](file:///c:/Users/IZABELLAA/Documents/ARENA_VOICE_VOTO_POPULAR/supabase/schema.sql))
+- **`public.events`**: Identificador, nome, descrição, status (`draft`, `active`, `finished`), `current_round_id`, `current_project_id`, `results_published` e timestamps.
+- **`public.projects`**: Identificador, chave estrangeira para evento, nome, categoria, descrição, `banner_url`, `image_url`, ordem de apresentação, status e flags ativas.
+- **`public.rounds`**: Identificador UUID, chaves para evento e projeto, status (`waiting`, `open`, `closed`), `started_at`, `ended_at`, `released_at`, `closed_at`.
+- **`public.admin_profiles`**: Perfis vinculados a `auth.users(id)` com papéis RBAC (`superadmin`, `admin`, `operator`), status ativo e dados de auditoria (com view de compatibilidade `public.admins`).
+- **`public.votes`**: Registro individual de cada voto com notas de 1 a 5 (`check between 1 and 5`) e chave determinística `{event_id}_{project_id}_{voter_id}`.
+- **`public.results`**: Consolidação agregada $O(1)$ com `total_votes`, somatórios por critério, médias parciais, média geral, percentual e pontuação oficial de até 20 pontos (`popular_points`).
+
+#### 3. Regras de Integridade e Restrição de Voto Único
+- **Restrição de Negócio Rígida:** `CONSTRAINT uq_votes_event_project_voter UNIQUE (event_id, project_id, voter_id)`.
+- Garante matematicamente que um participante só pode registrar um único voto por projeto dentro de um mesmo evento, mesmo que o projeto seja liberado em múltiplas rodadas subsequentes.
+- Tentativas de reenvio disparam violação de unicidade tratada com mensagem amigável: *"Voto duplicado: Você já avaliou este projeto neste evento."*
+
+#### 4. Segurança PL/pgSQL e Identidade Inegociável
+- **Identidade Servidor Obrigatória:** A função `submit_vote` extrai o ID exclusivamente através de `auth.uid()`. Nenhum parâmetro `voter_uid` enviado pelo cliente é aceito, impedindo spoofing de identidade ou manipulação de votos.
+- **`SECURITY DEFINER` com `SET search_path = public, pg_temp`:** Todas as procedures executam com privilégios restritos e imunes a ataques de injeção de caminho de busca.
+- **Políticas RLS Rigorosas:**
+  - `votes`: Somente o próprio votante pode consultar seus votos (`voter_id = auth.uid()`). A inserção e atualização direta via API REST pública são negadas (somente a procedure `submit_vote` executa a inserção).
+  - `results`: Leitura pública somente quando `results_published = true` no evento ou para administradores autenticados.
+  - `admin_profiles`: Apenas administradores ativos autenticados têm acesso a dados sensíveis de gestão.
+- **Privacidade Realtime:** A tabela `votes` foi expressamente omitida da publicação `supabase_realtime` para evitar vazamento de dados de avaliação individual e IDs de participantes pela rede WebSocket. Apenas `events`, `rounds`, `projects` e `results` são transmitidos.
+
+#### 5. Integração Frontend e Serviços ([`src/supabase/client.ts`](file:///c:/Users/IZABELLAA/Documents/ARENA_VOICE_VOTO_POPULAR/src/supabase/client.ts))
+- **Cliente Supabase Seguro:** Inicializado com `VITE_SUPABASE_URL` e `VITE_SUPABASE_ANON_KEY`. A chave restrita `service_role` **nunca** é referenciada nem embutida no frontend.
+- **`AuthService` ([`src/services/authService.ts`](file:///c:/Users/IZABELLAA/Documents/ARENA_VOICE_VOTO_POPULAR/src/services/authService.ts)):**
+  - Votantes anônimos: `supabase.auth.signInAnonymously()` com persistência transparente em `localStorage`.
+  - Administradores: `supabase.auth.signInWithPassword()` com validação cruzada na tabela `admin_profiles` e verificação de perfil ativo.
+  - Fallback local gracioso em caso de ausência de conectividade.
+- **`EventService` ([`src/services/eventService.ts`](file:///c:/Users/IZABELLAA/Documents/ARENA_VOICE_VOTO_POPULAR/src/services/eventService.ts)):**
+  - Implementa subscrições Realtime em canais Supabase (`postgres_changes` para `events`, `rounds`, `projects`, `results`).
+  - Executa operações atômicas via RPC: `submit_vote`, `open_round`, `close_round`, `prepare_next_round` e `get_admin_results`.
+
+#### 6. Migração de Dados e Preservação do Firebase
+- **Script de Migração ([`scripts/migrateFirebaseToSupabase.mjs`](file:///c:/Users/IZABELLAA/Documents/ARENA_VOICE_VOTO_POPULAR/scripts/migrateFirebaseToSupabase.mjs)):**
+  - Extrai dados oficiais existentes sem alterar o banco de dados Firebase existente.
+  - Gera [`supabase/seed_migration.sql`](file:///c:/Users/IZABELLAA/Documents/ARENA_VOICE_VOTO_POPULAR/supabase/seed_migration.sql) com inserts idempotentes (`ON CONFLICT DO NOTHING`).
+  - Gera [`supabase/migration_data.json`](file:///c:/Users/IZABELLAA/Documents/ARENA_VOICE_VOTO_POPULAR/supabase/migration_data.json) para conferência de integridade.
+
+#### 7. Suíte de Testes Automatizada ([`scripts/testSupabaseIntegration.mjs`](file:///c:/Users/IZABELLAA/Documents/ARENA_VOICE_VOTO_POPULAR/scripts/testSupabaseIntegration.mjs))
+- Execução com **100% de aprovação (33 de 33 testes)**:
+  - [x] Existência de todas as 6 tabelas relacionais.
+  - [x] Restrição de unicidade `UNIQUE(event_id, project_id, voter_id)`.
+  - [x] Restrições de checagem para notas 1 a 5 em todos os critérios.
+  - [x] Presença e assinatura das 5 procedures atômicas.
+  - [x] Extração obrigatória de `auth.uid()` em `submit_vote` com `SECURITY DEFINER`.
+  - [x] RLS ativo em `votes`, `results` e `rounds`.
+  - [x] Omissão de `votes` na publicação Realtime para preservação de sigilo.
+  - [x] Estado inicial `'aguardando'` validado no mock e no componente administrativo.
+  - [x] Client Supabase livre de chaves administrativas sensíveis.
+  - [x] Assinatura e submissão RPC homologadas.
+
+#### 8. Compilação de Produção
+- `npm run build` (`tsc && vite build`) executado com sucesso e zero erros de tipagem TypeScript.
+- Pacote final gerado em `dist/`.
+
+---
 
 ---
 

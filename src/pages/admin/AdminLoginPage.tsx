@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { ArenaLogo, ArenaMascot } from '@/components/branding';
 import { Mail, Lock, ArrowRight, AlertCircle, Shield } from 'lucide-react';
 import { AdminActionButton } from '@/components/admin';
+import { AuthService } from '@/services/authService';
 
 export const AdminLoginPage: React.FC = () => {
   const navigate = useNavigate();
@@ -31,23 +32,27 @@ export const AdminLoginPage: React.FC = () => {
     setIsLoading(true);
 
     try {
-      // Simulação assíncrona preparada para Firebase Auth signInWithEmailAndPassword
-      await new Promise((resolve) => setTimeout(resolve, 800));
+      const authResult = await AuthService.signInAdmin(email, password);
 
-      // Salva sessão local para navegação do painel
+      // Salva sessão para navegação do painel
       sessionStorage.setItem(
         'arena_voice_admin_token',
         JSON.stringify({
-          email: email.trim(),
+          uid: authResult.user.uid,
+          email: authResult.user.email || email.trim(),
           loginTime: new Date().toISOString(),
-          role: 'admin',
+          role: authResult.role,
         })
       );
 
       navigate('/admin/projetos');
     } catch (err: unknown) {
       console.error(err);
-      setErrorMessage('Falha ao autenticar. Verifique suas credenciais de acesso.');
+      const msg =
+        err instanceof Error
+          ? err.message
+          : 'Falha ao autenticar. Verifique suas credenciais de acesso.';
+      setErrorMessage(msg);
     } finally {
       setIsLoading(false);
     }

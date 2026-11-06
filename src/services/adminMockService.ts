@@ -41,9 +41,9 @@ const INITIAL_PROJECTS: Project[] = [
 
 const INITIAL_ROUND: Round = {
   projetoAtualId: 'projeto01',
-  status: 'aberta',
-  inicio: new Date().toISOString(),
-  totalVotos: 142,
+  status: 'aguardando',
+  inicio: undefined,
+  totalVotos: 0,
 };
 
 const INITIAL_EVENT_CONFIG: EventConfig = {

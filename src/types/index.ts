@@ -4,6 +4,7 @@
  */
 
 export * from './firebase';
+export * from './supabase';
 
 export interface Project {
   id: string;

@@ -18,7 +18,7 @@ export const AdminRoundPage: React.FC = () => {
   const [currentRoundDoc, setCurrentRoundDoc] = useState<RoundDocument | null>(null);
   const [currentProject, setCurrentProject] = useState<Project | null>(null);
   const [projectsList, setProjectsList] = useState<Project[]>([]);
-  const [roundStatus, setRoundStatus] = useState<RoundStatusType>('aberta');
+  const [roundStatus, setRoundStatus] = useState<RoundStatusType>('aguardando');
   const [seconds, setSeconds] = useState(0);
   const [votesCount, setVotesCount] = useState(0);
   const [isLoadingAction, setIsLoadingAction] = useState(false);
