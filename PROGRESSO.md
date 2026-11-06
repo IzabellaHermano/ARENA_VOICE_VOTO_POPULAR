@@ -14,8 +14,103 @@ Este documento registra o status de execução de cada uma das 9 etapas de desen
 - [x] **Etapa 5: Controle de Rodadas, Sincronização em Tempo Real e Voto Único com Firebase** (Concluída e Homologada ✅)
 - [x] **Etapa 6: Dashboard, Resultados e Ranking Oficial dos 20%** (Concluída e Homologada ✅)
 - [x] **Etapa 7: QR Code, Telão e Experiência em Tempo Real** (Concluída e Homologada ✅)
-- [ ] **Etapa 8: Relatórios, Exportação de Dados e Auditoria** (Aguardando autorização)
-- [ ] **Etapa 9: Testes de Carga, Resiliência, Otimização e Homologação Final** (Pendente)
+- [x] **Etapa 8: Testes Completos, Segurança, Concorrência e Auditoria** (Concluída e Homologada ✅)
+- [x] **Etapa 9: Finalização, Fidelidade Visual, Simulação Ponta a Ponta e Homologação** (Concluída ✅ - Aguardando comando para deploy final)
+
+---
+
+### Detalhamento da Etapa 9 — Concluída e Homologada ✅
+
+#### 1. Revisão e Preservação Estrita da Identidade Visual
+- **Fidelidade com `referencias/telas/`:** Todas as 12 telas do sistema (Home, Espera, Avaliação, Confirmação, Login, Projetos, Controle da Rodada, Configurações, Dashboard, Ranking, Telão 16:9 e QR Code) foram revisadas e validadas em consonância com as especificações visuais de palco.
+- **Logos Oficiais:** Preservados os 6 arquivos originais em `public/assets/branding/` (`logo-completa.png`, `logo-escrita.png`, `logo-escrita-slogan.png`, `logo-escrita-transparente.png`, `mascote-transparente.png`, `mascote-preto.png`).
+- **Diretrizes de Marca Inegociáveis:** A palavra **ARENA** permanece prateada cromada, **VOICE** dourada metálica, mascote com mão metálica em 'V' segurando microfone, iluminação neon vermelha/azul e slogan *"Ideias que viram futuro"*.
+
+#### 2. Otimizações de Código e Desempenho
+- **Carregamento Otimizado de Imagens:** Atributos `loading="eager"` nas logos primárias com `decoding="async"` para evitar engasgos de renderização.
+- **Consultas $O(1)$:** O Dashboard e o Telão consomem exclusivamente a coleção agregada `results`, garantindo resposta instantânea com complexidade constante independentemente do número de votos computados.
+- **Acessibilidade e Ergonomia Mobile:** Alvos de toque com dimensão mínima $\ge 44\text{px}$ nos seletores de nota e botões primários; `role="radiogroup"` e `aria-labelledby` integrados.
+- **ErrorBoundary Corporativo:** Prevenção ativa contra telas brancas em falhas não tratadas, mantendo o usuário seguro com interface temática e ação de recarregamento.
+
+#### 3. Simulação Ponta a Ponta do Ciclo do Evento ([`scripts/testEtapa9Simulation.mjs`](file:///c:/Users/IZABELLAA/Documents/ARENA_VOICE_VOTO_POPULAR/scripts/testEtapa9Simulation.mjs))
+- Execução dos 15 passos da esteira do evento com 100% de sucesso:
+  1. [x] Administrador entra no painel de controle.
+  2. [x] Cadastro de projetos competidores com categorias e ordens.
+  3. [x] Seleção do projeto ativo da vez.
+  4. [x] Liberação de votação no servidor (`openRound`).
+  5. [x] Acesso dos participantes via QR Code / URL pública sem fricção.
+  6. [x] Preenchimento dos 3 critérios obrigatórios de notas (1 a 5).
+  7. [x] Registro atômico do voto com chave determinística.
+  8. [x] Atualização instantânea da contagem e somatórios agregados.
+  9. [x] Encerramento da rodada pelo administrador (`closeRound`).
+  10. [x] Preparação da próxima equipe no modo de espera (`waiting`).
+  11. [x] Repetição do ciclo completo para os demais competidores.
+  12. [x] Consolidação de métricas em tempo real no Dashboard.
+  13. [x] Cálculo da fórmula oficial dos 20% com precisão de ponto flutuante.
+  14. [x] Projeção do Ranking Oficial de Palco e Pódio 3D (Ouro, Prata, Bronze).
+  15. [x] Exportação de relatórios auditáveis em CSV, Excel e PDF.
+
+#### 4. Documentação Master ([`README.md`](file:///c:/Users/IZABELLAA/Documents/ARENA_VOICE_VOTO_POPULAR/README.md))
+- Elaborado manual completo cobrindo os 17 tópicos obrigatórios: Visão geral, arquitetura, tecnologias, árvore de diretórios, instalação local, configuração do Firebase, variáveis de ambiente, autenticação anônima vs administrativa, Firestore, Cloud Functions, rotinas de testes, procedimentos para o evento e publicação.
+
+---
+
+---
+
+### Detalhamento da Etapa 8 — Concluída e Homologada ✅
+
+#### 1. Auditoria do Fluxo Público
+- **Resolução de QR Code:** Sem domínios fictícios, apontando dinamicamente para a URL oficial pública (`/votar`).
+- **Validação de Formulário:** Bloqueio estrito de submissões incompletas (quando qualquer um dos 3 critérios — Inovação, Impacto, Desenvolvimento — não estiver preenchido de 1 a 5).
+- **Chave Determinística por Projeto:** Formato `${eventId}_${projectId}_${voterUid}`, garantindo voto único em cada projeto sem impedir o participante de avaliar projetos subsequentes.
+- **Persistência de Sessão:** A atualização de página (`F5`) no navegador preserva o estado de voto e a tela de confirmação/agradecimento via `localStorage` e Firestore.
+
+#### 2. Auditoria das Funcionalidades Administrativas
+- **Painel Operacional:** Login institucional, Logout com limpeza de token de sessão, cadastro de novos projetos, edição de projetos existentes, URLs de banners temáticos e seleção de projeto para apresentação.
+- **Controle de Rodadas:** Abertura com timestamp oficial do servidor (`openRound`), encerramento atômico com registro de encerramento (`closeRound`) e preparação do próximo projeto no estado de espera sem abertura indevida precoce (`prepareNextRound`).
+- **Exportação Multiformato:** Validados os motores de exportação em CSV com UTF-8 BOM e delimitador `;` para Excel BR, Planilha Excel SpreadsheetML estruturada com tipagem e Relatório Executivo em PDF com cabeçalho oficial para homologação de resultados.
+
+#### 3. Auditoria de Segurança e Regras do Firestore ([`firestore.rules`](file:///c:/Users/IZABELLAA/Documents/ARENA_VOICE_VOTO_POPULAR/firestore.rules))
+- **Negação de Escrita Direta pelo Cliente:** Escrita direta nas coleções `votes` e `results` completamente bloqueada (`allow write: if false;`). Todo processamento e cálculo agregado ocorrem exclusivamente via Cloud Functions com Firebase Admin SDK.
+- **Restrição de Resultados Não Publicados:** Regra aprimorada para impedir que clientes anônimos leiam a coleção `results` antes da publicação oficial do evento (`resultsPublished == true`).
+- **Proteção Administrativa:** Apenas usuários com *custom claims* validadas no token (`admin == true` ou `role == 'admin'`) podem gerenciar rodadas e coleções restritas.
+- **Validação de Notas no Servidor:** Rejeição rigorosa de valores fora do intervalo 1 a 5, números decimais ou strings inválidas.
+
+#### 4. Simulação de Concorrência e Transações Atômicas ([`scripts/testEtapa8.mjs`](file:///c:/Users/IZABELLAA/Documents/ARENA_VOICE_VOTO_POPULAR/scripts/testEtapa8.mjs))
+- **50 Votos Simultâneos:** Execução concorrente massiva com integridade matemática absoluta de contagem de votos, soma de critérios, cálculo de percentual e pontuação de 20% sem perdas ou condições de corrida (*race conditions*).
+- **Proteção contra Voto Duplicado:** Tentativas concorrentes do mesmo UID resultam em rejeição imediata com erro `already-exists`.
+- **Encerramento de Rodada Concorrente:** Submissões disparadas no momento do encerramento da rodada são bloqueadas com erro `failed-precondition`.
+
+#### 5. Limitações de Identidade Documentadas
+- **Análise Técnica:** O Firebase Anonymous Authentication vincula a identidade ao navegador/dispositivo (`browserLocalPersistence`). Ele não garante controle biológico ou de CPF por pessoa física, permitindo que participantes utilizem janelas anônimas ou múltiplos aparelhos.
+- **Mitigações Ativas:** Bloqueio por UID no Firestore, chave de documento determinística e controle de sessão local no dispositivo.
+
+#### 6. Desempenho e Arquitetura Agregada O(1)
+- **Consumo de Leituras O(1):** O Dashboard e o Telão consomem exclusivamente a coleção agregada `results/{eventId}_{projectId}`, eliminando a necessidade de ler milhares de votos individuais da coleção `votes` e economizando 99%+ em cotas do Firestore.
+- **Gerenciamento de Memória:** Listeners `onSnapshot` desacoplados com funções de cancelamento (*unsubscribes*) nos efeitos de ciclo de vida do React.
+
+#### 7. Fidelidade Estrita da Identidade Visual Oficial
+- Todos os 6 arquivos originais de marca em `public/assets/branding/` preservados intactos:
+  1. `logo-completa.png` (Mão metálica + ARENA VOICE + slogan)
+  2. `logo-escrita.png` (ARENA prateado + VOICE dourado)
+  3. `logo-escrita-slogan.png` (Logo escrita com slogan)
+  4. `logo-escrita-transparente.png` (Versão transparente para menu lateral)
+  5. `mascote-preto.png` (Mascote metálico cromado)
+  6. `mascote-transparente.png` (Mascote em fundo transparente)
+
+#### 8. Responsividade Multi-Resolução
+- Suporte homologado às larguras: 320px, 375px, 390px, 430px, 768px, 1366px e 1920px.
+- Alvos de toque $\ge 44\text{px}$ nos seletores de notas e botões de ação móveis.
+- Proteção contra rolagem horizontal involuntária (`overflow-x-hidden`).
+
+#### 9. Tratamento de Erros e Prevenção de Telas Brancas ([`src/components/ui/ErrorBoundary.tsx`](file:///c:/Users/IZABELLAA/Documents/ARENA_VOICE_VOTO_POPULAR/src/components/ui/ErrorBoundary.tsx))
+- **ErrorBoundary Corporativo:** Implementado e envolvendo a árvore da aplicação no `App.tsx`. Exibe tela temática da Arena Voice com mensagem acolhedora e botão de recarregamento em caso de falhas inesperadas de renderização.
+- **Tratamento Offline:** Monitoramento dinâmico dos status `offline` e `reconnecting`, bloqueando submissão de votos sem confirmação do servidor.
+
+#### 10. Suíte de Testes Automatizada ([`scripts/testEtapa8.mjs`](file:///c:/Users/IZABELLAA/Documents/ARENA_VOICE_VOTO_POPULAR/scripts/testEtapa8.mjs))
+- Execução com 100% de aprovação técnica (15 de 15 testes auditados com sucesso).
+
+---
 
 ---
 

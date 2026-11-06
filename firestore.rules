@@ -53,10 +53,13 @@ service cloud.firestore {
     }
 
     // 6. COLEÇÃO: results
-    // Leitura: pública para telão e painéis quando os resultados estiverem ativos
-    // Escrita direta pelo cliente: PROIBIDA (cálculos matemáticos e agregações processados atomicamente pelo backend)
+    // Leitura: pública apenas após a publicação oficial dos resultados (resultsPublished == true), ou por administradores
+    // Escrita direta pelo cliente: PROIBIDA (cálculos e agregações processados atomicamente pelo backend)
     match /results/{resultId} {
-      allow read: if true;
+      allow read: if isAdmin() || (
+        resource.data.eventId != null &&
+        get(/databases/$(database)/documents/events/$(resource.data.eventId)).data.resultsPublished == true
+      );
       allow write: if false;
     }
 
