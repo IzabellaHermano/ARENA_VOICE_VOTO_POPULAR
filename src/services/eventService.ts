@@ -6,7 +6,10 @@ import {
   ResultDocument,
   generateDeterministicVoteId,
 } from '@/types';
+import { calculateApprovalStats, ApprovalStats } from '@/utils/approvalCalculator';
 import { AdminMockService } from './adminMockService';
+
+export type { ApprovalStats };
 
 export const DEFAULT_EVENT_ID = 'arena-voice-2026';
 
@@ -1080,6 +1083,99 @@ export const EventService = {
       active,
       status: active ? 'active' : 'inactive',
     });
+  },
+
+  /**
+   * Consulta e calcula as estatísticas reais de aprovação do projeto (Ponteiro Dinâmico)
+   * Baseado exclusivamente nos votos reais registrados no Supabase
+   */
+  async getProjectApprovalStats(
+    eventId: string,
+    projectId: string,
+    roundId?: string
+  ): Promise<ApprovalStats> {
+    if (!isSupabaseConfigured || !projectId) {
+      return calculateApprovalStats([]);
+    }
+
+    try {
+      let query = supabase
+        .from('votes')
+        .select('innovation, impact, development, round_id')
+        .eq('event_id', eventId)
+        .eq('project_id', projectId);
+
+      if (roundId) {
+        query = query.eq('round_id', roundId);
+      }
+
+      const { data, error } = await query;
+      if (error) {
+        console.warn('Erro ao consultar votos para ponteiro de aprovação:', error.message);
+        return calculateApprovalStats([]);
+      }
+
+      return calculateApprovalStats(data || []);
+    } catch (err) {
+      console.warn('Falha no cálculo do ponteiro:', err);
+      return calculateApprovalStats([]);
+    }
+  },
+
+  /**
+   * Monitora em tempo real as estatísticas de aprovação do projeto (Ponteiro Dinâmico)
+   * Dispara atualização após cada voto registrado no Supabase
+   */
+  subscribeToProjectApprovalStats(
+    eventId: string,
+    projectId: string,
+    roundId: string | undefined,
+    onUpdate: (stats: ApprovalStats) => void
+  ): Unsubscribe {
+    if (!isSupabaseConfigured || !projectId) {
+      onUpdate(calculateApprovalStats([]));
+      return () => {};
+    }
+
+    let isSubscribed = true;
+
+    const fetchStats = async () => {
+      if (!isSubscribed) return;
+      const stats = await this.getProjectApprovalStats(eventId, projectId, roundId);
+      if (isSubscribed) onUpdate(stats);
+    };
+
+    fetchStats();
+
+    // Escuta mudanças atômicas em results (que é atualizado em cada voto) e em votes
+    const resultDocId = `${eventId}_${projectId}`;
+    const channelId = `approval_gauge_${resultDocId}_${Date.now()}`;
+    const channel = supabase
+      .channel(channelId)
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'results', filter: `id=eq.${resultDocId}` },
+        () => {
+          fetchStats();
+        }
+      )
+      .on(
+        'postgres_changes',
+        { event: 'INSERT', schema: 'public', table: 'votes', filter: `project_id=eq.${projectId}` },
+        () => {
+          fetchStats();
+        }
+      )
+      .subscribe((status) => {
+        if (status === 'SUBSCRIBED') {
+          fetchStats();
+        }
+      });
+
+    return () => {
+      isSubscribed = false;
+      supabase.removeChannel(channel);
+    };
   },
 };
 

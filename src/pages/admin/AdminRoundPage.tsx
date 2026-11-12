@@ -7,8 +7,10 @@ import {
   RoundTimer,
   VoteCounter,
   AdminActionButton,
+  ApprovalGauge,
 } from '@/components/admin';
-import { Square, FastForward, BarChart2, RadioTower, Play, Layers, AlertCircle, QrCode, Tv } from 'lucide-react';
+import { calculateApprovalStats, ApprovalStats } from '@/utils/approvalCalculator';
+import { Square, FastForward, BarChart2, RadioTower, Play, Layers, AlertCircle, QrCode, Tv, Sparkles } from 'lucide-react';
 
 export const AdminRoundPage: React.FC = () => {
   const navigate = useNavigate();
@@ -23,6 +25,7 @@ export const AdminRoundPage: React.FC = () => {
   const [votesCount, setVotesCount] = useState(0);
   const [isLoadingAction, setIsLoadingAction] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [approvalStats, setApprovalStats] = useState<ApprovalStats>(() => calculateApprovalStats([]));
 
   // 1. Escuta o evento em tempo real no Supabase
   useEffect(() => {
@@ -160,6 +163,25 @@ export const AdminRoundPage: React.FC = () => {
 
     return () => unsub();
   }, [activeEvalProjectId]);
+
+  // 7. PONTEIRO DINÂMICO DE APROVAÇÃO: Sincronização em tempo real via Supabase
+  useEffect(() => {
+    if (!activeEvalProjectId) {
+      setApprovalStats(calculateApprovalStats([]));
+      return;
+    }
+
+    const unsub = EventService.subscribeToProjectApprovalStats(
+      DEFAULT_EVENT_ID,
+      activeEvalProjectId,
+      currentRoundDoc?.id,
+      (newStats) => {
+        setApprovalStats(newStats);
+      }
+    );
+
+    return () => unsub();
+  }, [activeEvalProjectId, currentRoundDoc?.id]);
 
   // AÇÃO: Encerrar Avaliação (Vermelho)
   const handleCloseRound = async () => {
@@ -354,6 +376,23 @@ export const AdminRoundPage: React.FC = () => {
           </div>
         </div>
       </div>
+
+      {/* 4. PONTEIRO DINÂMICO DE APROVAÇÃO (MEDIDOR ANALÓGICO MODERNO) */}
+      {normalizedStatus === 'aberta' || normalizedStatus === 'encerrada' ? (
+        <ApprovalGauge
+          stats={approvalStats}
+          projectName={currentProject?.nome || 'Projeto em Votação'}
+          projectCategory={currentProject?.categoria}
+          roundStatus={normalizedStatus}
+        />
+      ) : (
+        <div className="bg-arena-card/60 border border-arena-border/50 rounded-2xl p-4 text-center text-xs text-gray-500 flex items-center justify-center gap-2">
+          <Sparkles className="w-4 h-4 text-gray-500" />
+          <span>
+            O Ponteiro Dinâmico de Aprovação será ativado automaticamente ao liberar a votação deste projeto.
+          </span>
+        </div>
+      )}
 
       {/* Barra de Ações: Botões de Controle */}
       <div className="bg-arena-card border border-arena-border rounded-2xl p-5 flex flex-wrap items-center justify-between gap-4 shadow-xl">
