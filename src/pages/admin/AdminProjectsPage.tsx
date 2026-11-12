@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Project } from '@/types';
 import { EventService, DEFAULT_EVENT_ID, ProjectHistoryCheck } from '@/services/eventService';
+import { useAdminEvent } from '@/contexts/AdminEventContext';
 import { ProjectCard, ProjectForm, AdminActionButton } from '@/components/admin';
 import {
   Play,
@@ -18,6 +19,8 @@ import {
 
 export const AdminProjectsPage: React.FC = () => {
   const navigate = useNavigate();
+  const { currentEventId } = useAdminEvent();
+  const activeEventId = currentEventId || DEFAULT_EVENT_ID;
 
   const [projects, setProjects] = useState<Project[]>([]);
   const [selectedProjectId, setSelectedProjectId] = useState<string>('');
@@ -27,6 +30,13 @@ export const AdminProjectsPage: React.FC = () => {
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [isLoadingList, setIsLoadingList] = useState(true);
+
+  // Se nenhum evento estiver selecionado no contexto, redireciona para Meus Eventos
+  useEffect(() => {
+    if (!currentEventId) {
+      navigate('/admin/eventos', { replace: true });
+    }
+  }, [currentEventId, navigate]);
 
   // Estado do Modal de Exclusão / Histórico
   const [deleteModalState, setDeleteModalState] = useState<{
@@ -51,11 +61,13 @@ export const AdminProjectsPage: React.FC = () => {
     }
   }, [successMessage]);
 
-  // Carrega e escuta projetos em tempo real exclusivamente via Supabase
+  // Carrega e escuta projetos em tempo real exclusivamente via Supabase para o evento ativo
   useEffect(() => {
+    if (!activeEventId) return;
+
     setIsLoadingList(true);
     const unsub = EventService.subscribeToProjectsList(
-      DEFAULT_EVENT_ID,
+      activeEventId,
       (supabaseProjects) => {
         setIsLoadingList(false);
         if (supabaseProjects && supabaseProjects.length > 0) {
@@ -140,9 +152,9 @@ export const AdminProjectsPage: React.FC = () => {
         });
         setSuccessMessage(`Projeto "${data.nome}" atualizado com sucesso no Supabase.`);
       } else {
-        // Criação de novo projeto oficial no Supabase
+        // Criação de novo projeto oficial no Supabase para o evento ativo
         await EventService.createProject({
-          eventId: DEFAULT_EVENT_ID,
+          eventId: activeEventId,
           name: data.nome || '',
           category: data.categoria,
           description: data.descricao,
@@ -249,7 +261,7 @@ export const AdminProjectsPage: React.FC = () => {
     setErrorMessage(null);
 
     try {
-      await EventService.openRound(DEFAULT_EVENT_ID, selectedProjectId);
+      await EventService.openRound(activeEventId, selectedProjectId);
       navigate('/admin/votacao');
     } catch (err: unknown) {
       console.error('Erro ao abrir rodada no Supabase:', err);

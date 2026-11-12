@@ -15,6 +15,7 @@ import BigScreenPresentationPage from '@/pages/public/BigScreenPresentationPage'
 
 // Admin Pages
 import AdminLoginPage from '@/pages/admin/AdminLoginPage';
+import AdminEventsPage from '@/pages/admin/AdminEventsPage';
 import AdminProjectsPage from '@/pages/admin/AdminProjectsPage';
 import AdminRoundPage from '@/pages/admin/AdminRoundPage';
 import AdminResultsPage from '@/pages/admin/AdminResultsPage';
@@ -59,7 +60,8 @@ export const AppRoutes: React.FC = () => {
           </ProtectedRoute>
         }
       >
-        <Route index element={<Navigate to="/admin/projetos" replace />} />
+        <Route index element={<Navigate to="/admin/eventos" replace />} />
+        <Route path="eventos" element={<AdminEventsPage />} />
         <Route path="projetos" element={<AdminProjectsPage />} />
         <Route path="votacao" element={<AdminRoundPage />} />
         <Route path="rodada" element={<Navigate to="/admin/votacao" replace />} />

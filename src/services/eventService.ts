@@ -22,6 +22,30 @@ export interface SubmitVotePayload {
   development: number;
 }
 
+export interface CreateEventPayload {
+  id?: string;
+  name: string;
+  subtitle?: string;
+  description?: string;
+  eventDate?: string;
+  bannerUrl?: string;
+  status?: 'draft' | 'active' | 'finished' | 'archived';
+}
+
+export interface UpdateEventPayload {
+  name?: string;
+  subtitle?: string;
+  description?: string;
+  eventDate?: string;
+  bannerUrl?: string;
+  status?: 'draft' | 'active' | 'finished' | 'archived';
+  resultsPublished?: boolean;
+}
+
+export interface EventSummary extends EventDocument {
+  projectsCount: number;
+}
+
 export interface CreateProjectPayload {
   id?: string;
   eventId?: string;
@@ -60,6 +84,10 @@ function mapEventRow(row: any): EventDocument {
   return {
     id: row.id,
     name: row.name,
+    description: row.description || '',
+    subtitle: row.subtitle || '',
+    eventDate: row.event_date || null,
+    bannerUrl: row.banner_url || '',
     status: row.status,
     currentRoundId: row.current_round_id || null,
     currentProjectId: row.current_project_id || null,
@@ -131,6 +159,256 @@ function mapResultRow(row: any): ResultDocument {
 }
 
 export const EventService = {
+  /**
+   * Consulta a lista de todos os eventos com contagem de projetos
+   */
+  async listEvents(): Promise<EventSummary[]> {
+    if (!isSupabaseConfigured) {
+      return [{
+        id: DEFAULT_EVENT_ID,
+        name: 'Arena Voice 2026',
+        description: 'Competição oficial de inovação com voto popular em tempo real.',
+        status: 'active',
+        currentRoundId: null,
+        currentProjectId: null,
+        resultsPublished: false,
+        createdAt: { seconds: Date.now() / 1000, nanoseconds: 0 } as any,
+        updatedAt: { seconds: Date.now() / 1000, nanoseconds: 0 } as any,
+        projectsCount: 1,
+      }];
+    }
+
+    const { data: events, error } = await supabase
+      .from('events')
+      .select('*')
+      .order('created_at', { ascending: false });
+
+    if (error) {
+      throw new Error(`Falha ao listar eventos no Supabase: ${error.message}`);
+    }
+
+    // Consulta contagem de projetos agrupada por evento
+    const { data: projects } = await supabase
+      .from('projects')
+      .select('event_id');
+
+    const countMap: Record<string, number> = {};
+    (projects || []).forEach((p: any) => {
+      if (p.event_id) {
+        countMap[p.event_id] = (countMap[p.event_id] || 0) + 1;
+      }
+    });
+
+    return (events || []).map((ev: any) => ({
+      ...mapEventRow(ev),
+      projectsCount: countMap[ev.id] || 0,
+    }));
+  },
+
+  /**
+   * Monitora em tempo real a lista de eventos com contagem de projetos
+   */
+  subscribeToEventsList(
+    onUpdate: (events: EventSummary[]) => void,
+    onError?: (err: Error) => void
+  ): Unsubscribe {
+    if (!isSupabaseConfigured) {
+      onUpdate([{
+        id: DEFAULT_EVENT_ID,
+        name: 'Arena Voice 2026',
+        description: 'Competição oficial de inovação com voto popular em tempo real.',
+        status: 'active',
+        currentRoundId: null,
+        currentProjectId: null,
+        resultsPublished: false,
+        createdAt: { seconds: Date.now() / 1000, nanoseconds: 0 } as any,
+        updatedAt: { seconds: Date.now() / 1000, nanoseconds: 0 } as any,
+        projectsCount: 1,
+      }]);
+      return () => {};
+    }
+
+    let isSubscribed = true;
+
+    const fetchAll = async () => {
+      try {
+        const events = await this.listEvents();
+        if (isSubscribed) {
+          onUpdate(events);
+        }
+      } catch (err: any) {
+        if (isSubscribed && onError) onError(err);
+      }
+    };
+
+    fetchAll();
+
+    const channelId = `events_list_sub_${Date.now()}`;
+    const channel = supabase
+      .channel(channelId)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'events' }, () => {
+        if (isSubscribed) fetchAll();
+      })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'projects' }, () => {
+        if (isSubscribed) fetchAll();
+      })
+      .subscribe((status) => {
+        if (status === 'SUBSCRIBED') {
+          fetchAll();
+        }
+      });
+
+    return () => {
+      isSubscribed = false;
+      supabase.removeChannel(channel);
+    };
+  },
+
+  /**
+   * Cria um novo evento oficial no Supabase (public.events)
+   */
+  async createEvent(payload: CreateEventPayload): Promise<EventDocument> {
+    if (!payload.name || !payload.name.trim()) {
+      throw new Error('O nome do evento é obrigatório.');
+    }
+
+    const trimmedName = payload.name.trim();
+
+    // Gera um ID/slug único e limpo
+    let id = payload.id?.trim();
+    if (!id) {
+      const slug = trimmedName
+        .toLowerCase()
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .replace(/[^a-z0-9]+/g, '-')
+        .replace(/^-+|-+$/g, '');
+      id = slug ? `${slug}-${Date.now().toString(36)}` : `evento-${Date.now().toString(36)}`;
+    }
+
+    const status = payload.status || 'draft';
+
+    const insertPayload: Record<string, any> = {
+      id,
+      name: trimmedName,
+      description: payload.description?.trim() || '',
+      status: status === 'archived' ? 'draft' : status,
+      results_published: false,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    };
+
+    if (payload.subtitle) insertPayload.subtitle = payload.subtitle.trim();
+    if (payload.eventDate) insertPayload.event_date = payload.eventDate;
+    if (payload.bannerUrl) insertPayload.banner_url = payload.bannerUrl.trim();
+
+    const { data, error } = await supabase
+      .from('events')
+      .insert(insertPayload)
+      .select('*')
+      .single();
+
+    if (error) {
+      // Se deu erro por coluna opcional não existente (ex.: subtitle, event_date), tenta fallback apenas com colunas padrão
+      if (error.message.includes('column') || error.code === '42703') {
+        const { data: fallbackData, error: fallbackError } = await supabase
+          .from('events')
+          .insert({
+            id,
+            name: trimmedName,
+            description: payload.description?.trim() || (payload.subtitle ? `${payload.subtitle} - ${payload.description || ''}` : ''),
+            status: status === 'archived' ? 'draft' : status,
+            results_published: false,
+          })
+          .select('*')
+          .single();
+
+        if (fallbackError) {
+          throw new Error(`Falha ao criar evento no Supabase: ${fallbackError.message}`);
+        }
+        return mapEventRow(fallbackData);
+      }
+
+      throw new Error(`Falha ao cadastrar evento: ${error.message}`);
+    }
+
+    return mapEventRow(data);
+  },
+
+  /**
+   * Atualiza dados de um evento existente no Supabase
+   */
+  async updateEvent(eventId: string, payload: UpdateEventPayload): Promise<EventDocument> {
+    if (!eventId) throw new Error('ID do evento é obrigatório.');
+
+    const updatePayload: Record<string, any> = {
+      updated_at: new Date().toISOString(),
+    };
+
+    if (payload.name !== undefined) updatePayload.name = payload.name.trim();
+    if (payload.description !== undefined) updatePayload.description = payload.description.trim();
+    if (payload.status !== undefined) {
+      updatePayload.status = payload.status === 'archived' ? 'draft' : payload.status;
+    }
+    if (payload.resultsPublished !== undefined) updatePayload.results_published = payload.resultsPublished;
+    if (payload.subtitle !== undefined) updatePayload.subtitle = payload.subtitle.trim();
+    if (payload.eventDate !== undefined) updatePayload.event_date = payload.eventDate;
+    if (payload.bannerUrl !== undefined) updatePayload.banner_url = payload.bannerUrl.trim();
+
+    const { data, error } = await supabase
+      .from('events')
+      .update(updatePayload)
+      .eq('id', eventId)
+      .select('*')
+      .single();
+
+    if (error) {
+      // Fallback caso alguma coluna opcional ainda não exista no schema
+      if (error.message.includes('column') || error.code === '42703') {
+        const minimalPayload: Record<string, any> = {
+          updated_at: new Date().toISOString(),
+        };
+        if (payload.name !== undefined) minimalPayload.name = payload.name.trim();
+        if (payload.description !== undefined) minimalPayload.description = payload.description.trim();
+        if (payload.status !== undefined) minimalPayload.status = payload.status === 'archived' ? 'draft' : payload.status;
+        if (payload.resultsPublished !== undefined) minimalPayload.results_published = payload.resultsPublished;
+
+        const { data: retryData, error: retryError } = await supabase
+          .from('events')
+          .update(minimalPayload)
+          .eq('id', eventId)
+          .select('*')
+          .single();
+
+        if (retryError) throw new Error(`Falha ao atualizar evento: ${retryError.message}`);
+        return mapEventRow(retryData);
+      }
+
+      throw new Error(`Falha ao atualizar evento: ${error.message}`);
+    }
+
+    return mapEventRow(data);
+  },
+
+  /**
+   * Obtém detalhes de um evento específico pelo ID
+   */
+  async getEventById(eventId: string): Promise<EventDocument | null> {
+    if (!eventId) return null;
+    const { data, error } = await supabase
+      .from('events')
+      .select('*')
+      .eq('id', eventId)
+      .maybeSingle();
+
+    if (error) {
+      console.warn(`Erro ao buscar evento ${eventId}:`, error.message);
+      return null;
+    }
+
+    return data ? mapEventRow(data) : null;
+  },
+
   /**
    * Monitora o evento principal em tempo real via Supabase Realtime
    */

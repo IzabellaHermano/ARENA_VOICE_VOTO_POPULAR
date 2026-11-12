@@ -2,6 +2,7 @@ import React from 'react';
 import { BrowserRouter } from 'react-router-dom';
 import { VotingProvider } from '@/contexts/VotingProvider';
 import { AdminAuthProvider } from '@/contexts/AdminAuthContext';
+import { AdminEventProvider } from '@/contexts/AdminEventContext';
 import { ErrorBoundary } from '@/components/ui';
 import AppRoutes from '@/routes';
 
@@ -10,9 +11,11 @@ export const App: React.FC = () => {
     <ErrorBoundary>
       <BrowserRouter>
         <AdminAuthProvider>
-          <VotingProvider>
-            <AppRoutes />
-          </VotingProvider>
+          <AdminEventProvider>
+            <VotingProvider>
+              <AppRoutes />
+            </VotingProvider>
+          </AdminEventProvider>
         </AdminAuthProvider>
       </BrowserRouter>
     </ErrorBoundary>

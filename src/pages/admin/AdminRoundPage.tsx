@@ -2,6 +2,7 @@ import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Project, RoundStatus as RoundStatusType, RoundDocument, ResultDocument } from '@/types';
 import { EventService, DEFAULT_EVENT_ID } from '@/services/eventService';
+import { useAdminEvent } from '@/contexts/AdminEventContext';
 import {
   RoundStatus,
   RoundTimer,
@@ -29,6 +30,15 @@ import {
 
 export const AdminRoundPage: React.FC = () => {
   const navigate = useNavigate();
+  const { currentEventId } = useAdminEvent();
+  const activeEventId = currentEventId || DEFAULT_EVENT_ID;
+
+  // Redireciona para Meus Eventos se nenhum evento foi selecionado
+  useEffect(() => {
+    if (!currentEventId) {
+      navigate('/admin/eventos', { replace: true });
+    }
+  }, [currentEventId, navigate]);
 
   const [activeEvent, setActiveEvent] = useState<any>(null);
   const [currentRoundDoc, setCurrentRoundDoc] = useState<RoundDocument | null>(null);
@@ -45,19 +55,23 @@ export const AdminRoundPage: React.FC = () => {
   const configuredDuration = useMemo(() => getConfiguredVotingDuration(), []);
   const autoClosedRoundIdRef = useRef<string | null>(null);
 
-  // 1. Escuta o evento em tempo real no Supabase
+  // 1. Escuta o evento em tempo real no Supabase para o evento ativo
   useEffect(() => {
-    const unsub = EventService.subscribeToCurrentEvent(DEFAULT_EVENT_ID, (ev) => {
+    if (!activeEventId) return;
+
+    const unsub = EventService.subscribeToCurrentEvent(activeEventId, (ev) => {
       if (ev) {
         setActiveEvent(ev);
       }
     });
     return () => unsub();
-  }, []);
+  }, [activeEventId]);
 
-  // 2. Escuta a lista de projetos em tempo real no Supabase (ordenados por ordem)
+  // 2. Escuta a lista de projetos em tempo real no Supabase (ordenados por ordem) para o evento ativo
   useEffect(() => {
-    const unsub = EventService.subscribeToProjectsList(DEFAULT_EVENT_ID, (projs) => {
+    if (!activeEventId) return;
+
+    const unsub = EventService.subscribeToProjectsList(activeEventId, (projs) => {
       if (projs && projs.length > 0) {
         const sorted = [...projs]
           .sort((a, b) => (a.order ?? 0) - (b.order ?? 0))
@@ -76,7 +90,7 @@ export const AdminRoundPage: React.FC = () => {
       }
     });
     return () => unsub();
-  }, []);
+  }, [activeEventId]);
 
   // 3. Projetos ativos ordenados rigidamente
   const activeProjects = useMemo(() => {
@@ -201,7 +215,7 @@ export const AdminRoundPage: React.FC = () => {
       return;
     }
 
-    const unsub = EventService.subscribeToProjectResult(DEFAULT_EVENT_ID, activeEvalProjectId, (resDoc: ResultDocument | null) => {
+    const unsub = EventService.subscribeToProjectResult(activeEventId, activeEvalProjectId, (resDoc: ResultDocument | null) => {
       if (resDoc && typeof resDoc.totalVotes === 'number') {
         setVotesCount(resDoc.totalVotes);
       } else {
@@ -210,7 +224,7 @@ export const AdminRoundPage: React.FC = () => {
     });
 
     return () => unsub();
-  }, [activeEvalProjectId]);
+  }, [activeEventId, activeEvalProjectId]);
 
   // 8. CÁLCULO DA ORDEM RIGOROSA DOS PROJETOS
   const currentProjectIndex = useMemo(() => {
@@ -242,7 +256,7 @@ export const AdminRoundPage: React.FC = () => {
     setErrorMessage(null);
 
     try {
-      await EventService.closeRound(DEFAULT_EVENT_ID, currentRoundDoc?.id);
+      await EventService.closeRound(activeEventId, currentRoundDoc?.id);
       setSuccessMessage('Votação encerrada com sucesso!');
       setTimeout(() => setSuccessMessage(null), 3000);
     } catch (err: any) {
@@ -265,7 +279,7 @@ export const AdminRoundPage: React.FC = () => {
     setErrorMessage(null);
 
     try {
-      await EventService.openRound(DEFAULT_EVENT_ID, targetProjId);
+      await EventService.openRound(activeEventId, targetProjId);
       setSuccessMessage('Avaliação liberada com sucesso! Telão e celulares atualizados.');
       setTimeout(() => setSuccessMessage(null), 3000);
     } catch (err: any) {
@@ -287,7 +301,7 @@ export const AdminRoundPage: React.FC = () => {
     setErrorMessage(null);
 
     try {
-      await EventService.prepareNextRound(DEFAULT_EVENT_ID, nextProject.id);
+      await EventService.prepareNextRound(activeEventId, nextProject.id);
       setSelectedProjectId(nextProject.id);
       setCurrentProject(nextProject);
       setSuccessMessage(`Próximo projeto preparado: ${nextProject.nome}. Pronto para liberar.`);
@@ -306,7 +320,7 @@ export const AdminRoundPage: React.FC = () => {
     setErrorMessage(null);
 
     try {
-      await EventService.toggleResultsPublished(DEFAULT_EVENT_ID, true);
+      await EventService.toggleResultsPublished(activeEventId, true);
       setSuccessMessage('Resultado oficial publicado no Telão! Pódio revelado com sucesso.');
       setTimeout(() => setSuccessMessage(null), 5000);
     } catch (err: any) {

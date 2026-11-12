@@ -1,6 +1,8 @@
 import React, { useState, useEffect, useMemo } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { ArenaLogo } from '@/components/branding';
 import { EventService, DEFAULT_EVENT_ID } from '@/services/eventService';
+import { useAdminEvent } from '@/contexts/AdminEventContext';
 import { ProjectDocument, ResultDocument, EventDocument } from '@/types';
 import { buildRankedResults, ProjectScoringResult } from '@/utils/scoring';
 import {
@@ -22,6 +24,17 @@ import {
 } from 'lucide-react';
 
 export const AdminResultsPage: React.FC = () => {
+  const navigate = useNavigate();
+  const { currentEventId } = useAdminEvent();
+  const activeEventId = currentEventId || DEFAULT_EVENT_ID;
+
+  // Redireciona para Meus Eventos se nenhum evento foi selecionado
+  useEffect(() => {
+    if (!currentEventId) {
+      navigate('/admin/eventos', { replace: true });
+    }
+  }, [currentEventId, navigate]);
+
   const [activeEvent, setActiveEvent] = useState<EventDocument | null>(null);
   const [projects, setProjects] = useState<ProjectDocument[]>([]);
   const [resultsList, setResultsList] = useState<ResultDocument[]>([]);
@@ -32,30 +45,36 @@ export const AdminResultsPage: React.FC = () => {
 
   // 1. Escuta o evento em tempo real (para status de publicação resultsPublished)
   useEffect(() => {
-    const unsub = EventService.subscribeToCurrentEvent(DEFAULT_EVENT_ID, (ev) => {
+    if (!activeEventId) return;
+
+    const unsub = EventService.subscribeToCurrentEvent(activeEventId, (ev) => {
       if (ev) {
         setActiveEvent(ev);
       }
     });
     return () => unsub();
-  }, []);
+  }, [activeEventId]);
 
   // 2. Escuta os projetos em tempo real exclusivamente do Supabase
   useEffect(() => {
-    const unsub = EventService.subscribeToProjectsList(DEFAULT_EVENT_ID, (projs) => {
+    if (!activeEventId) return;
+
+    const unsub = EventService.subscribeToProjectsList(activeEventId, (projs) => {
       setProjects(projs || []);
       setIsLoading(false);
     });
     return () => unsub();
-  }, []);
+  }, [activeEventId]);
 
   // 3. Escuta todos os resultados consolidados do evento em tempo real
   useEffect(() => {
-    const unsub = EventService.subscribeToAllEventResults(DEFAULT_EVENT_ID, (resList) => {
+    if (!activeEventId) return;
+
+    const unsub = EventService.subscribeToAllEventResults(activeEventId, (resList) => {
       setResultsList(resList || []);
     });
     return () => unsub();
-  }, []);
+  }, [activeEventId]);
 
   // 4. Constrói o ranking matemático oficial respeitando todas as regras da Etapa 6
   const rankedResults: ProjectScoringResult[] = useMemo(() => {
@@ -77,15 +96,15 @@ export const AdminResultsPage: React.FC = () => {
   const handleTogglePublish = async (newStatus: boolean) => {
     setIsUpdatingPublish(true);
     try {
-      await EventService.toggleResultsPublished(DEFAULT_EVENT_ID, newStatus);
+      await EventService.toggleResultsPublished(activeEventId, newStatus);
       setActiveEvent((prev) => (prev ? { ...prev, resultsPublished: newStatus } : null));
     } catch (err) {
-      console.warn('Erro ao atualizar status de divulgação no Firestore:', err);
-      // Fallback local se Firestore emulador offline
+      console.warn('Erro ao atualizar status de divulgação no Supabase:', err);
+      // Fallback local se erro
       setActiveEvent((prev) =>
         prev
           ? { ...prev, resultsPublished: newStatus }
-          : ({ id: DEFAULT_EVENT_ID, resultsPublished: newStatus } as any)
+          : ({ id: activeEventId, resultsPublished: newStatus } as any)
       );
     } finally {
       setIsUpdatingPublish(false);

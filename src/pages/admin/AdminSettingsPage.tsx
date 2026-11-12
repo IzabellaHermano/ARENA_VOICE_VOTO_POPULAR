@@ -1,7 +1,9 @@
 import React, { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { EventConfig, AdminUser, Project } from '@/types';
 import { AdminMockService } from '@/services/adminMockService';
 import { EventService, DEFAULT_EVENT_ID } from '@/services/eventService';
+import { useAdminEvent } from '@/contexts/AdminEventContext';
 import { AdminActionButton } from '@/components/admin';
 import {
   Sliders,
@@ -18,6 +20,17 @@ import {
 } from 'lucide-react';
 
 export const AdminSettingsPage: React.FC = () => {
+  const navigate = useNavigate();
+  const { currentEventId } = useAdminEvent();
+  const activeEventId = currentEventId || DEFAULT_EVENT_ID;
+
+  // Redireciona para Meus Eventos se nenhum evento foi selecionado
+  useEffect(() => {
+    if (!currentEventId) {
+      navigate('/admin/eventos', { replace: true });
+    }
+  }, [currentEventId, navigate]);
+
   const [eventConfig, setEventConfig] = useState<EventConfig>(() =>
     AdminMockService.getEventConfig()
   );
@@ -31,7 +44,9 @@ export const AdminSettingsPage: React.FC = () => {
 
   // 1. Carrega lista real de projetos do Supabase ordenados por ordem
   useEffect(() => {
-    const unsub = EventService.subscribeToProjectsList(DEFAULT_EVENT_ID, (projs) => {
+    if (!activeEventId) return;
+
+    const unsub = EventService.subscribeToProjectsList(activeEventId, (projs) => {
       if (projs && projs.length > 0) {
         const sorted = [...projs]
           .sort((a, b) => (a.order ?? 0) - (b.order ?? 0))
@@ -46,12 +61,12 @@ export const AdminSettingsPage: React.FC = () => {
           }));
         setProjects(sorted);
       } else {
-        setProjects(AdminMockService.getProjects());
+        setProjects([]);
       }
     });
 
     return () => unsub();
-  }, []);
+  }, [activeEventId]);
 
   // 2. Mover projeto para cima ou para baixo na fila oficial
   const handleMoveProject = (index: number, direction: 'up' | 'down') => {

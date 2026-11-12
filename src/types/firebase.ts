@@ -9,7 +9,12 @@ import { Timestamp } from 'firebase/firestore';
 export interface EventDocument {
   id?: string;
   name: string;
-  status: 'draft' | 'active' | 'finished';
+  description?: string;
+  subtitle?: string;
+  eventDate?: string | null;
+  bannerUrl?: string;
+  projectsCount?: number;
+  status: 'draft' | 'active' | 'finished' | 'archived';
   currentRoundId: string | null;
   currentProjectId: string | null;
   resultsPublished: boolean;

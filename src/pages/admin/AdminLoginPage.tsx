@@ -36,10 +36,10 @@ export const AdminLoginPage: React.FC = () => {
   const [resetError, setResetError] = useState('');
   const [resetSuccess, setResetSuccess] = useState('');
 
-  // Se já autenticado, redireciona diretamente para o painel administrativo
+  // Se já autenticado, redireciona diretamente para a tela Meus Eventos
   useEffect(() => {
     if (!isAuthChecking && isAuthenticated) {
-      const origin = (location.state as any)?.from?.pathname || '/admin/projetos';
+      const origin = (location.state as any)?.from?.pathname || '/admin/eventos';
       navigate(origin, { replace: true });
     }
   }, [isAuthenticated, isAuthChecking, navigate, location]);
@@ -67,9 +67,9 @@ export const AdminLoginPage: React.FC = () => {
 
     try {
       await login(trimmedEmail, trimmedPassword);
-      setSuccessMessage('Autenticação confirmada! Redirecionando para o painel...');
+      setSuccessMessage('Autenticação confirmada! Redirecionando para Meus Eventos...');
       
-      const destination = (location.state as any)?.from?.pathname || '/admin/projetos';
+      const destination = (location.state as any)?.from?.pathname || '/admin/eventos';
       setTimeout(() => {
         navigate(destination, { replace: true });
       }, 400);
