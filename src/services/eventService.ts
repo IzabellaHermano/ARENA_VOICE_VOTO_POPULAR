@@ -143,7 +143,7 @@ export const EventService = {
 
     fetchEvent();
 
-    // 2. Canal Realtime no PostgreSQL
+    // 2. Canal Realtime no PostgreSQL com tratamento de ciclo de vida
     const channelId = `event_sub_${eventId}_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
     const channel = supabase
       .channel(channelId)
@@ -159,7 +159,16 @@ export const EventService = {
           }
         }
       )
-      .subscribe();
+      .subscribe((status, err) => {
+        if (!isSubscribed) return;
+        if (status === 'SUBSCRIBED') {
+          fetchEvent();
+        } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+          console.warn(`[Realtime events] status: ${status}`, err?.message);
+          // Tenta re-sincronizar via REST em caso de instabilidade do WebSocket
+          fetchEvent();
+        }
+      });
 
     // 3. Listener de reconexão de rede
     const handleOnline = () => {
@@ -241,7 +250,7 @@ export const EventService = {
 
     fetchRound();
 
-    // 2. Canal Realtime ouvindo a tabela rounds para o evento
+    // 2. Canal Realtime ouvindo a tabela rounds para o evento com tratamento de ciclo de vida
     const channelId = `round_sub_${roundId || 'any'}_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
     const channel = supabase
       .channel(channelId)
@@ -262,7 +271,15 @@ export const EventService = {
           }
         }
       )
-      .subscribe();
+      .subscribe((status, err) => {
+        if (!isSubscribed) return;
+        if (status === 'SUBSCRIBED') {
+          fetchRound();
+        } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+          console.warn(`[Realtime rounds] status: ${status}`, err?.message);
+          fetchRound();
+        }
+      });
 
     const handleOnline = () => {
       fetchRound();
@@ -343,11 +360,29 @@ export const EventService = {
           if (payload.new) onUpdate(mapProjectRow(payload.new));
         }
       )
-      .subscribe();
+      .subscribe((status, err) => {
+        if (!isSubscribed) return;
+        if (status === 'SUBSCRIBED') {
+          fetchProject();
+        } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+          console.warn(`[Realtime project] status: ${status}`, err?.message);
+          fetchProject();
+        }
+      });
+
+    const handleOnline = () => {
+      fetchProject();
+    };
+    if (typeof window !== 'undefined') {
+      window.addEventListener('online', handleOnline);
+    }
 
     return () => {
       isSubscribed = false;
       supabase.removeChannel(channel);
+      if (typeof window !== 'undefined') {
+        window.removeEventListener('online', handleOnline);
+      }
     };
   },
 
@@ -413,11 +448,29 @@ export const EventService = {
           fetchProjects();
         }
       )
-      .subscribe();
+      .subscribe((status, err) => {
+        if (!isSubscribed) return;
+        if (status === 'SUBSCRIBED') {
+          fetchProjects();
+        } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+          console.warn(`[Realtime projects list] status: ${status}`, err?.message);
+          fetchProjects();
+        }
+      });
+
+    const handleOnline = () => {
+      fetchProjects();
+    };
+    if (typeof window !== 'undefined') {
+      window.addEventListener('online', handleOnline);
+    }
 
     return () => {
       isSubscribed = false;
       supabase.removeChannel(channel);
+      if (typeof window !== 'undefined') {
+        window.removeEventListener('online', handleOnline);
+      }
     };
   },
 
@@ -480,11 +533,29 @@ export const EventService = {
           }
         }
       )
-      .subscribe();
+      .subscribe((status, err) => {
+        if (!isSubscribed) return;
+        if (status === 'SUBSCRIBED') {
+          fetchResult();
+        } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+          console.warn(`[Realtime result] status: ${status}`, err?.message);
+          fetchResult();
+        }
+      });
+
+    const handleOnline = () => {
+      fetchResult();
+    };
+    if (typeof window !== 'undefined') {
+      window.addEventListener('online', handleOnline);
+    }
 
     return () => {
       isSubscribed = false;
       supabase.removeChannel(channel);
+      if (typeof window !== 'undefined') {
+        window.removeEventListener('online', handleOnline);
+      }
     };
   },
 
@@ -534,11 +605,29 @@ export const EventService = {
           fetchAllResults();
         }
       )
-      .subscribe();
+      .subscribe((status, err) => {
+        if (!isSubscribed) return;
+        if (status === 'SUBSCRIBED') {
+          fetchAllResults();
+        } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+          console.warn(`[Realtime all results] status: ${status}`, err?.message);
+          fetchAllResults();
+        }
+      });
+
+    const handleOnline = () => {
+      fetchAllResults();
+    };
+    if (typeof window !== 'undefined') {
+      window.addEventListener('online', handleOnline);
+    }
 
     return () => {
       isSubscribed = false;
       supabase.removeChannel(channel);
+      if (typeof window !== 'undefined') {
+        window.removeEventListener('online', handleOnline);
+      }
     };
   },
 

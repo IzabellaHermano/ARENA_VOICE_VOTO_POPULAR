@@ -103,15 +103,10 @@ export const VotingProvider: React.FC<VotingProviderProps> = ({ children }) => {
     return () => unsubscribeEvent();
   }, []);
 
-  // 3. Escuta a rodada ativa em tempo real quando o evento definir currentRoundId
+  // 3. Escuta a rodada ativa em tempo real via Supabase
   useEffect(() => {
-    if (!event?.currentRoundId) {
-      setCurrentRound(null);
-      return;
-    }
-
     const unsubscribeRound = EventService.subscribeToActiveRound(
-      event.currentRoundId,
+      event?.currentRoundId || null,
       (updatedRound) => {
         setCurrentRound(updatedRound);
       },
