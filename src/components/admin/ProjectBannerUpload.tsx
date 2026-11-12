@@ -1,16 +1,50 @@
-import React, { useState, useRef } from 'react';
-import { UploadCloud, Image as ImageIcon, Trash2, CheckCircle2, AlertCircle, Loader2, RefreshCw } from 'lucide-react';
+import React, { useState, useRef, useEffect } from 'react';
+import {
+  UploadCloud,
+  Image as ImageIcon,
+  Trash2,
+  CheckCircle2,
+  AlertCircle,
+  Loader2,
+  RefreshCw,
+  FolderPlus,
+} from 'lucide-react';
 import { supabase, isSupabaseConfigured } from '@/supabase/client';
 
 export interface ProjectBannerUploadProps {
   currentBannerUrl?: string;
-  onBannerUploaded: (url: string) => void;
+  onBannerUploaded: (url: string, storagePath?: string) => void;
   onBannerRemoved: () => void;
   className?: string;
 }
 
 const MAX_FILE_SIZE_BYTES = 5 * 1024 * 1024; // 5 MB
 const ALLOWED_MIME_TYPES = ['image/png', 'image/jpeg', 'image/jpg', 'image/webp'];
+const ALLOWED_EXTENSIONS = ['.png', '.jpg', '.jpeg', '.webp'];
+
+/**
+ * Validação rigorosa do arquivo: checa se o conteúdo é realmente uma imagem
+ * decodificável pelo browser (evita arquivos maliciosos ou texto renomeado como imagem).
+ */
+const validateIsRealImage = (file: File): Promise<boolean> => {
+  return new Promise((resolve) => {
+    if (!file.type.startsWith('image/')) {
+      resolve(false);
+      return;
+    }
+    const img = new Image();
+    const objectUrl = URL.createObjectURL(file);
+    img.onload = () => {
+      URL.revokeObjectURL(objectUrl);
+      resolve(img.naturalWidth > 0 && img.naturalHeight > 0);
+    };
+    img.onerror = () => {
+      URL.revokeObjectURL(objectUrl);
+      resolve(false);
+    };
+    img.src = objectUrl;
+  });
+};
 
 export const ProjectBannerUpload: React.FC<ProjectBannerUploadProps> = ({
   currentBannerUrl,
@@ -28,19 +62,44 @@ export const ProjectBannerUpload: React.FC<ProjectBannerUploadProps> = ({
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  // Sincroniza com currentBannerUrl caso mude externamente (ex.: troca de projeto a editar)
+  useEffect(() => {
+    setPreviewUrl(currentBannerUrl || '');
+    if (!currentBannerUrl) {
+      setFileName('');
+      setFileSizeText('');
+    }
+  }, [currentBannerUrl]);
+
   const handleFile = async (file: File) => {
     setErrorMessage(null);
     setSuccessMessage(null);
 
-    // 1. Validação de Formato
-    if (!ALLOWED_MIME_TYPES.includes(file.type.toLowerCase())) {
-      setErrorMessage('Formato inválido. Apenas imagens PNG, JPG/JPEG ou WEBP são permitidas.');
+    // 1. Validação de Extensão de Arquivo
+    const lowerName = file.name.toLowerCase();
+    const hasValidExt = ALLOWED_EXTENSIONS.some((ext) => lowerName.endsWith(ext));
+    if (!hasValidExt) {
+      setErrorMessage('Formato inválido por extensão. Apenas imagens PNG, JPG/JPEG ou WEBP são permitidas.');
       return;
     }
 
-    // 2. Validação de Tamanho (Máx 5 MB)
+    // 2. Validação de Formato MIME
+    if (!ALLOWED_MIME_TYPES.includes(file.type.toLowerCase())) {
+      setErrorMessage('Formato de mídia não permitido. Apenas PNG, JPG/JPEG e WEBP são aceitos.');
+      return;
+    }
+
+    // 3. Validação de Tamanho (Máximo 5 MB)
     if (file.size > MAX_FILE_SIZE_BYTES) {
-      setErrorMessage(`O arquivo excede o limite máximo de 5 MB (${(file.size / (1024 * 1024)).toFixed(2)} MB).`);
+      const sizeMb = (file.size / (1024 * 1024)).toFixed(2);
+      setErrorMessage(`O arquivo selecionado excede o limite máximo de 5 MB (${sizeMb} MB). Reduza o tamanho da imagem.`);
+      return;
+    }
+
+    // 4. Validação Real de Imagem (Impede arquivos falsos ou corrompidos)
+    const isRealImage = await validateIsRealImage(file);
+    if (!isRealImage) {
+      setErrorMessage('O arquivo selecionado não é uma imagem válida decodificável ou está corrompido.');
       return;
     }
 
@@ -52,11 +111,11 @@ export const ProjectBannerUpload: React.FC<ProjectBannerUploadProps> = ({
     setFileName(file.name);
     setFileSizeText(sizeFormatted);
 
-    // 3. Prévia instantânea no navegador
+    // Pré-visualização instantânea local
     const localPreview = URL.createObjectURL(file);
     setPreviewUrl(localPreview);
 
-    // 4. Upload para o Supabase Storage (Bucket: project-banners)
+    // 5. Upload para o Supabase Storage (Bucket: project-banners)
     setIsUploading(true);
     try {
       if (!isSupabaseConfigured) {
@@ -76,30 +135,41 @@ export const ProjectBannerUpload: React.FC<ProjectBannerUploadProps> = ({
         });
 
       if (uploadError) {
-        console.warn('Falha no upload do Supabase Storage:', uploadError.message);
-        // Se o bucket ainda não tiver sido criado no Supabase, orienta o administrador
-        if (uploadError.message.includes('not found') || uploadError.message.includes('bucket')) {
+        console.warn('Falha no upload do Supabase Storage:', uploadError);
+        URL.revokeObjectURL(localPreview);
+        setPreviewUrl(currentBannerUrl || '');
+
+        const errCode = (uploadError as any).statusCode || (uploadError as any).status;
+        const msg = uploadError.message || '';
+
+        if (msg.includes('not found') || msg.includes('bucket') || errCode === '404' || errCode === 404) {
           setErrorMessage(
-            'Bucket "project-banners" não localizado no Supabase. Crie o bucket com permissão pública no Storage ou execute o script SQL.'
+            'Bucket "project-banners" não foi criado no Supabase Storage. É necessário autorizar o script SQL incremental de criação do bucket.'
+          );
+        } else if (errCode === '403' || errCode === 403 || msg.includes('policy') || msg.includes('row-level security')) {
+          setErrorMessage(
+            'Permissão negada pelo Supabase Storage (RLS). Apenas administradores autenticados podem enviar banners para o bucket "project-banners".'
           );
         } else {
-          setErrorMessage(`Erro ao enviar arquivo para o Supabase Storage: ${uploadError.message}`);
+          setErrorMessage(`Erro ao enviar arquivo para o Supabase Storage: ${msg}`);
         }
         setIsUploading(false);
         return;
       }
 
-      // Obtém URL Pública definitiva do arquivo armazenado
+      // Obtém URL Pública permanente do arquivo armazenado
       const { data: publicData } = supabase.storage
         .from('project-banners')
         .getPublicUrl(uploadData.path);
 
       const finalUrl = publicData.publicUrl;
       setPreviewUrl(finalUrl);
-      onBannerUploaded(finalUrl);
+      onBannerUploaded(finalUrl, uploadData.path);
       setSuccessMessage('Banner enviado e vinculado com sucesso!');
     } catch (err: any) {
       console.error('Erro no upload de banner:', err);
+      URL.revokeObjectURL(localPreview);
+      setPreviewUrl(currentBannerUrl || '');
       setErrorMessage(err?.message || 'Falha ao processar upload do banner.');
     } finally {
       setIsUploading(false);
@@ -149,7 +219,7 @@ export const ProjectBannerUpload: React.FC<ProjectBannerUploadProps> = ({
           Banner Oficial do Projeto
         </label>
         <span className="text-[11px] font-semibold text-gray-400">
-          Recomendado: 16:9 • Máx 5 MB (PNG, JPG, WEBP)
+          Proporção: 16:9 • Máx 5 MB (PNG, JPG, WEBP)
         </span>
       </div>
 
@@ -165,7 +235,7 @@ export const ProjectBannerUpload: React.FC<ProjectBannerUploadProps> = ({
       {/* Se houver imagem ou prévia selecionada */}
       {previewUrl ? (
         <div className="relative rounded-2xl overflow-hidden border border-arena-border bg-arena-black shadow-lg group">
-          {/* Container 16:9 sem distorção */}
+          {/* Container 16:9 mantendo proporção ideal */}
           <div className="relative aspect-video w-full flex items-center justify-center bg-gradient-to-br from-[#0C182D] to-black">
             <img
               src={previewUrl}
@@ -202,7 +272,7 @@ export const ProjectBannerUpload: React.FC<ProjectBannerUploadProps> = ({
             <div className="flex items-center gap-2 truncate pr-2">
               <ImageIcon className="w-4 h-4 text-arena-gold shrink-0" />
               <span className="text-gray-200 font-medium truncate font-mono">
-                {fileName || 'banner-projeto.png'}
+                {fileName || 'banner-cadastrado.png'}
               </span>
               {fileSizeText && (
                 <span className="text-[10px] text-gray-400 font-mono">({fileSizeText})</span>
@@ -254,6 +324,20 @@ export const ProjectBannerUpload: React.FC<ProjectBannerUploadProps> = ({
             </p>
           </div>
 
+          {/* Botão em destaque "ADICIONAR BANNER" */}
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              fileInputRef.current?.click();
+            }}
+            disabled={isUploading}
+            className="mt-3.5 px-4 py-2 rounded-xl bg-gradient-to-r from-arena-red to-[#B3050F] hover:from-[#FF1E27] hover:to-arena-red text-white text-xs font-black uppercase tracking-wider shadow-neon-glow transition-all flex items-center gap-2"
+          >
+            <FolderPlus className="w-4 h-4" />
+            <span>ADICIONAR BANNER</span>
+          </button>
+
           <div className="mt-3 inline-flex items-center gap-2 px-3 py-1 rounded-full bg-white/5 border border-white/10 text-[10px] text-gray-400 font-mono">
             <span>PNG, JPG, WEBP até 5 MB</span>
           </div>
@@ -262,7 +346,7 @@ export const ProjectBannerUpload: React.FC<ProjectBannerUploadProps> = ({
 
       {/* Feedback de Erro */}
       {errorMessage && (
-        <div className="p-3 rounded-xl bg-arena-red/15 border border-arena-red/40 text-arena-red text-xs flex items-center gap-2 animate-fade-in">
+        <div className="p-3.5 rounded-xl bg-arena-red/15 border border-arena-red/40 text-arena-red text-xs flex items-center gap-2 animate-fade-in">
           <AlertCircle className="w-4 h-4 shrink-0" />
           <span>{errorMessage}</span>
         </div>
@@ -270,7 +354,7 @@ export const ProjectBannerUpload: React.FC<ProjectBannerUploadProps> = ({
 
       {/* Feedback de Sucesso */}
       {successMessage && (
-        <div className="p-3 rounded-xl bg-arena-green/15 border border-arena-green/40 text-arena-green text-xs flex items-center gap-2 animate-fade-in">
+        <div className="p-3.5 rounded-xl bg-arena-green/15 border border-arena-green/40 text-arena-green text-xs flex items-center gap-2 animate-fade-in">
           <CheckCircle2 className="w-4 h-4 shrink-0" />
           <span>{successMessage}</span>
         </div>

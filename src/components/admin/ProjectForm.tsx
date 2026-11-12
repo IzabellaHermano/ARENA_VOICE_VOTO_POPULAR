@@ -3,6 +3,7 @@ import { Project } from '@/types';
 import { X, Save, AlertCircle } from 'lucide-react';
 import { AdminActionButton } from './AdminActionButton';
 import { ProjectBannerUpload } from './ProjectBannerUpload';
+import { supabase } from '@/supabase/client';
 
 export interface ProjectFormProps {
   isOpen: boolean;
@@ -27,6 +28,7 @@ export const ProjectForm: React.FC<ProjectFormProps> = ({
   const [ativo, setAtivo] = useState(true);
   const [error, setError] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [newlyUploadedStoragePath, setNewlyUploadedStoragePath] = useState<string | null>(null);
 
   useEffect(() => {
     if (projectToEdit) {
@@ -46,9 +48,34 @@ export const ProjectForm: React.FC<ProjectFormProps> = ({
     }
     setError('');
     setIsSubmitting(false);
+    setNewlyUploadedStoragePath(null);
   }, [projectToEdit, totalProjects, isOpen]);
 
   if (!isOpen) return null;
+
+  const handleBannerUploaded = (url: string, storagePath?: string) => {
+    setBannerUrl(url);
+    if (storagePath) {
+      setNewlyUploadedStoragePath(storagePath);
+    }
+  };
+
+  const handleBannerRemoved = () => {
+    setBannerUrl('');
+  };
+
+  const handleCancel = async () => {
+    // Se enviou um novo arquivo ao storage mas cancelou sem salvar, remove para evitar órfãos
+    if (newlyUploadedStoragePath) {
+      try {
+        await supabase.storage.from('project-banners').remove([newlyUploadedStoragePath]);
+      } catch (err) {
+        console.warn('Erro ao limpar arquivo órfão no cancelamento:', err);
+      }
+    }
+    setNewlyUploadedStoragePath(null);
+    onClose();
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -71,10 +98,12 @@ export const ProjectForm: React.FC<ProjectFormProps> = ({
         ativo,
       });
 
+      // Salvou com sucesso: o arquivo agora pertence ao projeto, não deve ser removido
+      setNewlyUploadedStoragePath(null);
       onClose();
     } catch (err: any) {
       console.error('Erro ao submeter formulário de projeto:', err);
-      setError(err?.message || 'Falha ao salvar o projeto.');
+      setError(err?.message || 'Falha ao salvar o projeto no Supabase.');
     } finally {
       setIsSubmitting(false);
     }
@@ -90,7 +119,7 @@ export const ProjectForm: React.FC<ProjectFormProps> = ({
           </h3>
           <button
             type="button"
-            onClick={onClose}
+            onClick={handleCancel}
             className="p-1 rounded-lg text-gray-400 hover:text-white hover:bg-white/10 transition-colors"
           >
             <X className="w-5 h-5" />
@@ -176,14 +205,14 @@ export const ProjectForm: React.FC<ProjectFormProps> = ({
           {/* Componente Oficial de Upload de Banners (Supabase Storage / Arquivo do Computador) */}
           <ProjectBannerUpload
             currentBannerUrl={bannerUrl}
-            onBannerUploaded={(url) => setBannerUrl(url)}
-            onBannerRemoved={() => setBannerUrl('')}
+            onBannerUploaded={handleBannerUploaded}
+            onBannerRemoved={handleBannerRemoved}
           />
 
           <div className="pt-4 border-t border-arena-border/60 flex items-center justify-end gap-3">
             <button
               type="button"
-              onClick={onClose}
+              onClick={handleCancel}
               className="px-4 py-2 rounded-xl text-xs font-semibold text-gray-400 hover:text-white hover:bg-white/5 transition-colors"
             >
               Cancelar
