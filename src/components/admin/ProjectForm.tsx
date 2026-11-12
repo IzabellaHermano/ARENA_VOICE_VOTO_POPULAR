@@ -8,7 +8,7 @@ export interface ProjectFormProps {
   projectToEdit?: Project | null;
   totalProjects: number;
   onClose: () => void;
-  onSave: (projectData: Partial<Project>) => void;
+  onSave: (projectData: Partial<Project>) => Promise<void> | void;
 }
 
 export const ProjectForm: React.FC<ProjectFormProps> = ({
@@ -25,6 +25,7 @@ export const ProjectForm: React.FC<ProjectFormProps> = ({
   const [ordem, setOrdem] = useState(1);
   const [ativo, setAtivo] = useState(true);
   const [error, setError] = useState('');
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   useEffect(() => {
     if (projectToEdit) {
@@ -43,28 +44,39 @@ export const ProjectForm: React.FC<ProjectFormProps> = ({
       setAtivo(true);
     }
     setError('');
+    setIsSubmitting(false);
   }, [projectToEdit, totalProjects, isOpen]);
 
   if (!isOpen) return null;
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!nome.trim()) {
       setError('O nome do projeto é obrigatório.');
       return;
     }
 
-    onSave({
-      id: projectToEdit ? projectToEdit.id : `projeto_${Date.now()}`,
-      nome: nome.trim(),
-      categoria: categoria.trim(),
-      descricao: descricao.trim(),
-      bannerUrl: bannerUrl.trim(),
-      ordem: Number(ordem),
-      ativo,
-    });
+    setIsSubmitting(true);
+    setError('');
 
-    onClose();
+    try {
+      await onSave({
+        id: projectToEdit ? projectToEdit.id : undefined,
+        nome: nome.trim(),
+        categoria: categoria.trim(),
+        descricao: descricao.trim(),
+        bannerUrl: bannerUrl.trim(),
+        ordem: Number(ordem),
+        ativo,
+      });
+
+      onClose();
+    } catch (err: any) {
+      console.error('Erro ao submeter formulário de projeto:', err);
+      setError(err?.message || 'Falha ao salvar o projeto.');
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   return (
@@ -191,9 +203,14 @@ export const ProjectForm: React.FC<ProjectFormProps> = ({
             <AdminActionButton
               type="submit"
               variant="primary"
+              isLoading={isSubmitting}
               icon={<Save className="w-4 h-4" />}
             >
-              {projectToEdit ? 'Salvar Alterações' : 'Cadastrar Projeto'}
+              {isSubmitting
+                ? 'Salvando no banco...'
+                : projectToEdit
+                ? 'Salvar Alterações'
+                : 'Cadastrar Projeto'}
             </AdminActionButton>
           </div>
         </form>

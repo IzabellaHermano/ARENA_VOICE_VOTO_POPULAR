@@ -22,10 +22,12 @@ export interface ProjectDocument {
   id?: string;
   eventId: string;
   name: string;
+  category?: string;
   description: string;
   bannerUrl: string;
   order: number;
   active: boolean;
+  status?: 'active' | 'inactive' | 'draft';
   createdAt: Timestamp;
   updatedAt: Timestamp;
 }

@@ -46,8 +46,11 @@ export const AdminRoundPage: React.FC = () => {
             bannerUrl: p.bannerUrl,
             ordem: p.order,
             ativo: p.active,
+            categoria: p.category || '',
           }))
         );
+      } else {
+        setProjectsList([]);
       }
     });
     return () => unsub();

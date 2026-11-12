@@ -19,6 +19,37 @@ export interface SubmitVotePayload {
   development: number;
 }
 
+export interface CreateProjectPayload {
+  id?: string;
+  eventId?: string;
+  name: string;
+  category?: string;
+  description?: string;
+  bannerUrl?: string;
+  order?: number;
+  active?: boolean;
+  status?: 'active' | 'inactive' | 'draft';
+}
+
+export interface UpdateProjectPayload {
+  name?: string;
+  category?: string;
+  description?: string;
+  bannerUrl?: string;
+  order?: number;
+  active?: boolean;
+  status?: 'active' | 'inactive' | 'draft';
+}
+
+export interface ProjectHistoryCheck {
+  hasHistory: boolean;
+  canDelete: boolean;
+  roundsCount: number;
+  votesCount: number;
+  resultsCount: number;
+  summary: string;
+}
+
 export type Unsubscribe = () => void;
 
 // Utilitários de mapeamento entre colunas do PostgreSQL (snake_case) e Interfaces TypeScript (camelCase)
@@ -40,10 +71,12 @@ function mapProjectRow(row: any): ProjectDocument {
     id: row.id,
     eventId: row.event_id,
     name: row.name,
+    category: row.category || '',
     description: row.description || '',
     bannerUrl: row.banner_url || row.image_url || '',
     order: row.order ?? 1,
     active: row.active ?? true,
+    status: row.status || (row.active ? 'active' : 'inactive'),
     createdAt: { seconds: Math.floor(new Date(row.created_at || Date.now()).getTime() / 1000), nanoseconds: 0 } as any,
     updatedAt: { seconds: Math.floor(new Date(row.updated_at || Date.now()).getTime() / 1000), nanoseconds: 0 } as any,
   };
@@ -829,6 +862,224 @@ export const EventService = {
     }
 
     return { success: true, reconciled_projects: 0 };
+  },
+
+  /**
+   * Cadastra um novo projeto oficial no Supabase (public.projects)
+   */
+  async createProject(projectData: CreateProjectPayload): Promise<ProjectDocument> {
+    if (!projectData.name || !projectData.name.trim()) {
+      throw new Error('O nome do projeto é obrigatório.');
+    }
+
+    const trimmedName = projectData.name.trim();
+    const eventId = projectData.eventId || DEFAULT_EVENT_ID;
+
+    let id = projectData.id?.trim();
+    if (!id) {
+      const slug = trimmedName
+        .toLowerCase()
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .replace(/[^a-z0-9]+/g, '-')
+        .replace(/^-+|-+$/g, '');
+      id = slug ? `proj_${slug}_${Date.now().toString(36)}` : `proj_${Date.now()}`;
+    }
+
+    let order = projectData.order;
+    if (order === undefined || order === null || order < 1) {
+      if (isSupabaseConfigured) {
+        const { count } = await supabase
+          .from('projects')
+          .select('id', { count: 'exact', head: true })
+          .eq('event_id', eventId);
+        order = (count || 0) + 1;
+      } else {
+        order = 1;
+      }
+    }
+
+    const active = projectData.active ?? true;
+    const status = projectData.status || (active ? 'active' : 'inactive');
+
+    if (isSupabaseConfigured) {
+      const { data, error } = await supabase
+        .from('projects')
+        .insert({
+          id,
+          event_id: eventId,
+          name: trimmedName,
+          category: projectData.category?.trim() || '',
+          description: projectData.description?.trim() || '',
+          banner_url: projectData.bannerUrl?.trim() || '',
+          image_url: projectData.bannerUrl?.trim() || '',
+          order,
+          active,
+          status,
+        })
+        .select('*')
+        .single();
+
+      if (error) {
+        console.error('Erro ao inserir projeto no Supabase:', error);
+        throw new Error(`Falha ao cadastrar projeto no banco: ${error.message}`);
+      }
+
+      return mapProjectRow(data);
+    }
+
+    throw new Error('Supabase não está configurado para operações no banco de dados.');
+  },
+
+  /**
+   * Atualiza os dados de um projeto existente diretamente no Supabase
+   * Preserva a chave primária (id) e a integridade de rodadas e votos
+   */
+  async updateProject(projectId: string, projectData: UpdateProjectPayload): Promise<ProjectDocument> {
+    if (!projectId) {
+      throw new Error('Identificador do projeto é obrigatório para atualização.');
+    }
+
+    if (projectData.name !== undefined && !projectData.name.trim()) {
+      throw new Error('O nome do projeto não pode ser vazio.');
+    }
+
+    const updatePayload: Record<string, any> = {
+      updated_at: new Date().toISOString(),
+    };
+
+    if (projectData.name !== undefined) updatePayload.name = projectData.name.trim();
+    if (projectData.category !== undefined) updatePayload.category = projectData.category.trim();
+    if (projectData.description !== undefined) updatePayload.description = projectData.description.trim();
+    if (projectData.bannerUrl !== undefined) {
+      updatePayload.banner_url = projectData.bannerUrl.trim();
+      updatePayload.image_url = projectData.bannerUrl.trim();
+    }
+    if (projectData.order !== undefined) updatePayload.order = Number(projectData.order);
+    if (projectData.active !== undefined) {
+      updatePayload.active = Boolean(projectData.active);
+      if (!projectData.status) {
+        updatePayload.status = projectData.active ? 'active' : 'inactive';
+      }
+    }
+    if (projectData.status !== undefined) updatePayload.status = projectData.status;
+
+    if (isSupabaseConfigured) {
+      const { data, error } = await supabase
+        .from('projects')
+        .update(updatePayload)
+        .eq('id', projectId)
+        .select('*')
+        .single();
+
+      if (error) {
+        console.error('Erro ao atualizar projeto no Supabase:', error);
+        throw new Error(`Falha ao atualizar projeto no banco: ${error.message}`);
+      }
+
+      return mapProjectRow(data);
+    }
+
+    throw new Error('Supabase não está configurado para operações no banco de dados.');
+  },
+
+  /**
+   * Verifica a integridade histórica de um projeto (rodadas, votos e resultados)
+   * Garante que nenhum projeto com votos computados seja excluído acidentalmente
+   */
+  async checkProjectHistory(projectId: string): Promise<ProjectHistoryCheck> {
+    if (!isSupabaseConfigured) {
+      return {
+        hasHistory: false,
+        canDelete: true,
+        roundsCount: 0,
+        votesCount: 0,
+        resultsCount: 0,
+        summary: 'Supabase não conectado.',
+      };
+    }
+
+    try {
+      const [roundsRes, votesRes, resultsRes] = await Promise.all([
+        supabase.from('rounds').select('id', { count: 'exact', head: true }).eq('project_id', projectId),
+        supabase.from('votes').select('id', { count: 'exact', head: true }).eq('project_id', projectId),
+        supabase.from('results').select('id', { count: 'exact', head: true }).eq('project_id', projectId),
+      ]);
+
+      const roundsCount = roundsRes.count || 0;
+      const votesCount = votesRes.count || 0;
+      const resultsCount = resultsRes.count || 0;
+      const hasHistory = roundsCount > 0 || votesCount > 0 || resultsCount > 0;
+
+      return {
+        hasHistory,
+        canDelete: !hasHistory,
+        roundsCount,
+        votesCount,
+        resultsCount,
+        summary: hasHistory
+          ? `O projeto possui histórico com ${roundsCount} rodada(s), ${votesCount} voto(s) e ${resultsCount} resultado(s) associados.`
+          : 'Nenhum histórico de rodada ou voto associado. Exclusão segura permitida.',
+      };
+    } catch (err: any) {
+      console.warn('Erro ao verificar histórico do projeto:', err);
+      return {
+        hasHistory: false,
+        canDelete: false,
+        roundsCount: 0,
+        votesCount: 0,
+        resultsCount: 0,
+        summary: 'Erro ao verificar integridade.',
+      };
+    }
+  },
+
+  /**
+   * Exclusão segura de projeto:
+   * Bloqueia exclusão física se houver histórico de votos ou rodadas.
+   * Permite exclusão caso o projeto seja limpo (sem vínculos).
+   */
+  async deleteProject(projectId: string, force = false): Promise<{ success: boolean; id: string }> {
+    if (!projectId) {
+      throw new Error('Identificador do projeto é obrigatório para exclusão.');
+    }
+
+    if (!force) {
+      const history = await this.checkProjectHistory(projectId);
+      if (history.hasHistory) {
+        throw new Error(
+          `Não é possível excluir fisicamente este projeto pois ele possui histórico registrado (${history.summary}). Para retirá-lo da votação sem violar a rastreabilidade da competição, utilize a opção de desativar o projeto.`
+        );
+      }
+    }
+
+    if (isSupabaseConfigured) {
+      // Limpa referência de current_project_id no evento se for o projeto atual
+      await supabase
+        .from('events')
+        .update({ current_project_id: null })
+        .eq('current_project_id', projectId);
+
+      const { error } = await supabase.from('projects').delete().eq('id', projectId);
+      if (error) {
+        console.error('Erro ao excluir projeto no Supabase:', error);
+        throw new Error(`Falha ao excluir projeto do banco: ${error.message}`);
+      }
+
+      return { success: true, id: projectId };
+    }
+
+    throw new Error('Supabase não está configurado para operações no banco de dados.');
+  },
+
+  /**
+   * Alterna o estado ativo/inativo de um projeto diretamente no Supabase
+   */
+  async toggleProjectActive(projectId: string, active: boolean): Promise<ProjectDocument> {
+    return this.updateProject(projectId, {
+      active,
+      status: active ? 'active' : 'inactive',
+    });
   },
 };
 
