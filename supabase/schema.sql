@@ -292,44 +292,78 @@ $$;
 -- 5.3 close_round: Encerramento atômico
 create or replace function public.close_round(
   p_event_id text,
-  p_round_id uuid
+  p_round_id uuid default null
 ) returns json language plpgsql security definer set search_path = public, pg_temp as $$
 declare
   v_event record;
+  v_closed_round_id uuid;
 begin
   if not public.is_admin() then
     raise exception 'Acesso negado: Apenas administradores podem encerrar rodadas.';
   end if;
 
   select * into v_event from public.events where id = p_event_id for update;
+  if not found then
+    raise exception 'Evento % não encontrado.', p_event_id;
+  end if;
 
-  update public.rounds
-  set status = 'closed', ended_at = now(), closed_at = now(), updated_at = now()
-  where id = p_round_id and event_id = p_event_id and status = 'open';
+  if p_round_id is not null then
+    update public.rounds
+    set status = 'closed', ended_at = now(), closed_at = now(), updated_at = now()
+    where id = p_round_id and event_id = p_event_id and status = 'open'
+    returning id into v_closed_round_id;
+  else
+    update public.rounds
+    set status = 'closed', ended_at = now(), closed_at = now(), updated_at = now()
+    where event_id = p_event_id and status = 'open'
+    returning id into v_closed_round_id;
+  end if;
 
   update public.events
   set current_round_id = null, updated_at = now()
   where id = p_event_id;
 
-  return json_build_object('success', true, 'round_id', p_round_id);
+  return json_build_object('success', true, 'round_id', coalesce(v_closed_round_id, p_round_id));
 end;
 $$;
 
--- 5.4 prepare_next_round: Avanço de projeto em modo 'waiting'
+-- 5.4 prepare_next_round: Avanço de projeto em modo 'waiting' (com seleção automática por ordem)
 create or replace function public.prepare_next_round(
   p_event_id text,
-  p_next_project_id text
+  p_next_project_id text default null
 ) returns json language plpgsql security definer set search_path = public, pg_temp as $$
 declare
   v_proj record;
+  v_current_proj_id text;
+  v_current_order int;
 begin
   if not public.is_admin() then
     raise exception 'Acesso negado: Apenas administradores podem preparar rodadas.';
   end if;
 
-  select * into v_proj from public.projects where id = p_next_project_id and event_id = p_event_id;
+  -- Se p_next_project_id for omitido, busca o próximo projeto automaticamente pela ordem
+  if p_next_project_id is null or trim(p_next_project_id) = '' then
+    select current_project_id into v_current_proj_id from public.events where id = p_event_id;
+    if v_current_proj_id is not null then
+      select "order" into v_current_order from public.projects where id = v_current_proj_id and event_id = p_event_id;
+    end if;
+
+    select * into v_proj from public.projects
+    where event_id = p_event_id and active = true and ("order" > coalesce(v_current_order, 0))
+    order by "order" asc limit 1;
+
+    if not found then
+      -- Se for o último, reinicia no primeiro projeto ativo
+      select * into v_proj from public.projects
+      where event_id = p_event_id and active = true
+      order by "order" asc limit 1;
+    end if;
+  else
+    select * into v_proj from public.projects where id = p_next_project_id and event_id = p_event_id;
+  end if;
+
   if not found or not v_proj.active then
-    raise exception 'Próximo projeto inválido ou inativo.';
+    raise exception 'Nenhum projeto ativo disponível para a próxima rodada.';
   end if;
 
   update public.rounds
@@ -337,10 +371,10 @@ begin
   where event_id = p_event_id and status = 'open';
 
   update public.events
-  set current_round_id = null, current_project_id = p_next_project_id, updated_at = now()
+  set current_round_id = null, current_project_id = v_proj.id, updated_at = now()
   where id = p_event_id;
 
-  return json_build_object('success', true, 'project_id', p_next_project_id);
+  return json_build_object('success', true, 'project_id', v_proj.id);
 end;
 $$;
 
@@ -538,13 +572,15 @@ create policy "rounds_all_admin" on public.rounds for all using (public.is_admin
 drop policy if exists "votes_select_own" on public.votes;
 create policy "votes_select_own" on public.votes for select using (voter_id = auth.uid() or public.is_admin());
 
--- Policies: results (Público só lê se divulgado)
+-- Policies: results (Leitura pública dos totais agregados para Telão e Painel em tempo real)
 drop policy if exists "results_select_public" on public.results;
-create policy "results_select_public" on public.results for select using (
-  public.is_admin() or (
-    exists (select 1 from public.events e where e.id = results.event_id and e.results_published = true)
-  )
-);
+create policy "results_select_public" on public.results for select using (true);
+
+-- Replica Identity FULL para entrega íntegra de eventos Supabase Realtime
+alter table public.events replica identity full;
+alter table public.projects replica identity full;
+alter table public.rounds replica identity full;
+alter table public.results replica identity full;
 
 -- Policies: admin_profiles
 drop policy if exists "admin_profiles_select_auth" on public.admin_profiles;

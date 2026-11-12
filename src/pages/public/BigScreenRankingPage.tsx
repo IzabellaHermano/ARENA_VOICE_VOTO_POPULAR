@@ -61,77 +61,7 @@ export const BigScreenRankingPage: React.FC = () => {
   // 3. Escuta os resultados em tempo real
   useEffect(() => {
     const unsub = EventService.subscribeToAllEventResults(DEFAULT_EVENT_ID, (resList) => {
-      if (resList && resList.length > 0) {
-        setResultsList(resList);
-      } else {
-        const mockResults: ResultDocument[] = [
-          {
-            id: `${DEFAULT_EVENT_ID}_projeto01`,
-            eventId: DEFAULT_EVENT_ID,
-            projectId: 'projeto01',
-            totalVotes: 142,
-            sumInnovation: 610.6,
-            sumImpact: 639.0,
-            sumDevelopment: 582.2,
-            averageInnovation: 4.3,
-            averageImpact: 4.5,
-            averageDevelopment: 4.1,
-            averageGeneral: 4.3,
-            percentage: 86.0,
-            popularPoints: 17.2,
-            updatedAt: { seconds: Date.now() / 1000, nanoseconds: 0 } as any,
-          },
-          {
-            id: `${DEFAULT_EVENT_ID}_projeto02`,
-            eventId: DEFAULT_EVENT_ID,
-            projectId: 'projeto02',
-            totalVotes: 128,
-            sumInnovation: 486.4,
-            sumImpact: 512.0,
-            sumDevelopment: 460.8,
-            averageInnovation: 3.8,
-            averageImpact: 4.0,
-            averageDevelopment: 3.6,
-            averageGeneral: 3.8,
-            percentage: 76.0,
-            popularPoints: 15.2,
-            updatedAt: { seconds: Date.now() / 1000, nanoseconds: 0 } as any,
-          },
-          {
-            id: `${DEFAULT_EVENT_ID}_projeto03`,
-            eventId: DEFAULT_EVENT_ID,
-            projectId: 'projeto03',
-            totalVotes: 156,
-            sumInnovation: 717.6,
-            sumImpact: 655.2,
-            sumDevelopment: 733.2,
-            averageInnovation: 4.6,
-            averageImpact: 4.2,
-            averageDevelopment: 4.7,
-            averageGeneral: 4.5,
-            percentage: 90.0,
-            popularPoints: 18.0,
-            updatedAt: { seconds: Date.now() / 1000, nanoseconds: 0 } as any,
-          },
-          {
-            id: `${DEFAULT_EVENT_ID}_projeto04`,
-            eventId: DEFAULT_EVENT_ID,
-            projectId: 'projeto04',
-            totalVotes: 110,
-            sumInnovation: 506.0,
-            sumImpact: 473.0,
-            sumDevelopment: 473.0,
-            averageInnovation: 4.6,
-            averageImpact: 4.3,
-            averageDevelopment: 4.3,
-            averageGeneral: 3.8,
-            percentage: 76.0,
-            popularPoints: 15.2,
-            updatedAt: { seconds: Date.now() / 1000, nanoseconds: 0 } as any,
-          },
-        ];
-        setResultsList(mockResults);
-      }
+      setResultsList(resList || []);
     });
     return () => unsub();
   }, []);

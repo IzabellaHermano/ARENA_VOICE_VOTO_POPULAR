@@ -97,21 +97,13 @@ export const AdminProjectsPage: React.FC = () => {
     setErrorMessage(null);
 
     try {
-      // Chamada oficial à Cloud Function openRound no servidor
+      // Chamada oficial à RPC open_round no Supabase
       await EventService.openRound(DEFAULT_EVENT_ID, selectedProjectId);
-      navigate('/admin/rodada');
+      navigate('/admin/votacao');
     } catch (err: unknown) {
-      console.warn('Erro ao chamar openRound no Firebase, aplicando fallback local:', err);
-      // Fallback local caso offline
-      const currentRound = AdminMockService.getRound();
-      AdminMockService.saveRound({
-        ...currentRound,
-        projetoAtualId: selectedProjectId,
-        status: 'aberta',
-        inicio: new Date().toISOString(),
-        totalVotos: 0,
-      });
-      navigate('/admin/rodada');
+      console.error('Erro ao abrir rodada no Supabase:', err);
+      const msg = err instanceof Error ? err.message : 'Falha ao liberar rodada no servidor.';
+      setErrorMessage(msg);
     } finally {
       setIsOpening(false);
     }

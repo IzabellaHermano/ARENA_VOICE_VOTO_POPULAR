@@ -19,6 +19,7 @@ Este documento registra o status de execução de cada uma das 9 etapas de desen
 - [x] **Migração Arquitetural — Etapa 1: Auditoria Completa e Planejamento da Migração para Supabase** (Concluída ✅)
 - [x] **Migração Arquitetural — Etapa 2: Migração Completa do Firebase para Supabase** (Concluída e Homologada ✅)
 - [x] **Nova Arquitetura — Etapa 3: Nova Entrada do Sistema, Login e Gerenciamento de Administradores** (Concluída e Homologada ✅)
+- [x] **Nova Arquitetura — Etapa 4: Correção do Motor de Votação e Sincronização em Tempo Real** (Concluída e Homologada ✅)
 
 ---
 
@@ -331,4 +332,65 @@ Este documento registra o status de execução de cada uma das 9 etapas de desen
 
 ---
 
-**Status Atual:** Etapa 7 concluída e homologada com 100% de aprovação técnica. Aguardando autorização do usuário para iniciar a **Etapa 8**.
+### Detalhamento da Nova Arquitetura — Etapa 4: Correção do Motor de Votação e Sincronização em Tempo Real ✅
+
+#### 1. Supabase como Fonte Única da Verdade
+- Eliminação definitiva de qualquer estado simulado ou fallbacks com dados fictícios (142 votos removidos de `AdminResultsPage`, `BigScreenRankingPage` e `BigScreenPresentationPage`).
+- O estado de abertura/fechamento e contagem de votos depende exclusivamente do banco PostgreSQL do Supabase.
+
+#### 2. Liberação de Projetos (`open_round`)
+- Implementação e validação da procedure PostgreSQL `public.open_round(p_event_id, p_project_id)`:
+  - Valida permissões via `public.is_admin()`.
+  - Executa lock transacional compartilhado no projeto e no evento (`for update`).
+  - Encerra rodadas anteriores em aberto do evento.
+  - Insere nova rodada com `status: 'open'`, `started_at: now()`, `released_at: now()`.
+  - Atualiza `public.events` com `current_round_id` e `current_project_id`.
+  - Transmissão via Supabase Realtime WebSocket notificando instantaneamente os navegadores públicos conectados.
+- Na tela administrativa ([`src/pages/admin/AdminRoundPage.tsx`](file:///c:/Users/IZABELLAA/Documents/ARENA_VOICE_VOTO_POPULAR/src/pages/admin/AdminRoundPage.tsx)), adicionado seletor dinâmico de projetos para permitir ao operador escolher qual projeto colocar em avaliação.
+
+#### 3. Encerramento de Rodadas (`close_round`)
+- Implementação e validação da procedure PostgreSQL `public.close_round(p_event_id, p_round_id default null)`:
+  - Altera status para `'closed'`, registra `ended_at` e `closed_at`.
+  - Atualiza o evento limpando `current_round_id`.
+  - Bloqueia novas tentativas de votos no banco com mensagem de erro clara.
+
+#### 4. Registro Atômico de Voto (`submit_vote`)
+- Procedure PostgreSQL `public.submit_vote(p_event_id, p_round_id, p_project_id, p_innovation, p_impact, p_development)`:
+  - Identificação estrita do votante no servidor via `auth.uid()` (anônimo ou autenticado), impedindo forja de identidade no frontend.
+  - Validação estrita das notas entre 1 e 5 (rejeitando notas fora do intervalo).
+  - Verificação de rodada aberta vinculada ao projeto e evento.
+  - Inserção atômica em `public.votes` com chave única determinística (`event_id_project_id_voter_id`).
+  - Atualização agregada incremental em `public.results` (`total_votes`, médias, percentual e pontuação de até 20 pontos).
+
+#### 5. Bloqueio Determinístico de Duplicidade
+- Restrição `UNIQUE (event_id, project_id, voter_id)` na tabela `votes`.
+- Se o mesmo participante tentar submeter mais de um voto para o mesmo projeto, o PostgreSQL rejeita a transação com `Voto duplicado: Você já avaliou este projeto neste evento.`.
+- O frontend (`VotingProvider` e `PublicVotingPage`) detecta a submissão prévia e exibe imediatamente a tela de confirmação e agradecimento.
+
+#### 6. Preparação para o Próximo Projeto (`prepare_next_round`)
+- Procedure PostgreSQL `public.prepare_next_round(p_event_id, p_next_project_id default null)`:
+  - Avança para o próximo projeto ativo por ordem de apresentação ou pelo ID informado.
+  - Altera o status para `waiting` (aguardando) e define `current_round_id = null`.
+  - **Não abre a votação automaticamente.**
+  - Os celulares dos participantes transitam automaticamente em tempo real para a sala de espera temática ("Aguardando início da avaliação do próximo participante").
+  - O participante fica liberado para votar no novo projeto assim que a próxima rodada for liberada pelo operador.
+
+#### 7. Suíte de Testes Ponta a Ponta Executada ([`scripts/testEtapa4VotingRealtime.mjs`](file:///c:/Users/IZABELLAA/Documents/ARENA_VOICE_VOTO_POPULAR/scripts/testEtapa4VotingRealtime.mjs))
+- Execução completa com **100% de aprovação (13 de 13 testes homologados ao vivo no Supabase)**:
+  1. [x] **Autenticação do Administrador no Supabase** (`admin@cptm.sp.gov.br`)
+  2. [x] **Autenticação Anônima do Eleitor 1** (`auth.signInAnonymously()`)
+  3. [x] **Autenticação Anônima do Eleitor 2** (`auth.signInAnonymously()`)
+  4. [x] **Admin libera rodada para Projeto 1** (`open_round`)
+  5. [x] **Sincronização Realtime WebSocket recebida pelo Eleitor** (`round_status: open`)
+  6. [x] **Eleitor 1 registra voto com notas (5, 4, 5)** (`submit_vote`)
+  7. [x] **Eleitor 2 registra voto com notas (4, 4, 4)** (`submit_vote`)
+  8. [x] **Tentativa de voto duplicado rejeitada pelo banco** (`UNIQUE constraint`)
+  9. [x] **Tentativa de nota inválida (> 5) rejeitada com erro de validação**
+  10. [x] **Admin encerra a rodada** (`close_round`)
+  11. [x] **Voto rejeitado quando a rodada está encerrada** (`A rodada de votação para este projeto não está aberta`)
+  12. [x] **Admin avança para próximo projeto** (`prepare_next_round` $\rightarrow$ `status: waiting`)
+  13. [x] **Resultados consolidados com integridade matemática oficial** (`results`: Total Votos, Média Geral, Pontos)
+
+---
+
+**Status Atual:** Etapa 4 (Nova Arquitetura — Correção do Motor de Votação e Sincronização em Tempo Real) concluída e homologada com 100% de aprovação técnica. Supabase validado e ativo em produção.

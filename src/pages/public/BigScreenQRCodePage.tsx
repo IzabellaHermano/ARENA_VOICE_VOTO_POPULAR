@@ -48,7 +48,7 @@ export const BigScreenQRCodePage: React.FC = () => {
         <div className="space-y-2">
           <div className="inline-flex items-center gap-2 px-3.5 py-1 rounded-full bg-arena-gold/15 text-arena-gold border border-arena-gold/30 text-xs font-black uppercase tracking-widest">
             <Sparkles className="w-3.5 h-3.5" />
-            <span>Votação Popular • 20% da Nota Oficial</span>
+            <span>Votação Popular</span>
           </div>
           <h1 className="text-3xl sm:text-5xl font-black tracking-tight text-white uppercase">
             VOTO <span className="text-arena-red">POPULAR</span>

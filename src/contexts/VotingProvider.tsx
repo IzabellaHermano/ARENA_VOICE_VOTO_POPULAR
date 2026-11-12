@@ -176,12 +176,22 @@ export const VotingProvider: React.FC<VotingProviderProps> = ({ children }) => {
   useEffect(() => {
     // Aplica apenas para as rotas do fluxo público
     const isPublicVotingPath =
-      location.pathname === '/votar' ||
+      location.pathname.startsWith('/votar') ||
       location.pathname === '/aguardando' ||
       location.pathname === '/avaliar' ||
       location.pathname === '/confirmacao';
 
     if (!isPublicVotingPath) return;
+
+    // Se estiver navegando via rota moderna /votar/:eventId, o componente PublicVotingPage já comuta internamente
+    // entre WaitingPage, EvaluationPage e ConfirmationPage com base em hasVotedCurrentProject e status.
+    // Para rotas legadas (/aguardando, /avaliar, /confirmacao), mantemos a navegação explícita:
+    const isLegacyRoute =
+      location.pathname === '/aguardando' ||
+      location.pathname === '/avaliar' ||
+      location.pathname === '/confirmacao';
+
+    if (!isLegacyRoute) return;
 
     if (!currentRound || currentRound.status !== 'open') {
       // Sem rodada aberta ou rodada encerrada/em espera:
@@ -236,7 +246,7 @@ export const VotingProvider: React.FC<VotingProviderProps> = ({ children }) => {
       setErrorMessage(null);
 
       try {
-        // Chamada oficial à Cloud Function submitVote
+        // Chamada oficial à RPC submit_vote no Supabase
         await EventService.submitVote({
           eventId: DEFAULT_EVENT_ID,
           roundId: currentRound.id || event?.currentRoundId || '',
@@ -249,7 +259,9 @@ export const VotingProvider: React.FC<VotingProviderProps> = ({ children }) => {
         // Marca localmente após confirmação formal do servidor
         localStorage.setItem(`voted_${DEFAULT_EVENT_ID}_${activeProjectId}_${voterUid}`, 'true');
         setHasVotedCurrentProject(true);
-        navigate('/confirmacao');
+        if (location.pathname === '/avaliar') {
+          navigate('/confirmacao');
+        }
       } catch (err: unknown) {
         console.error('Falha no envio do voto:', err);
         const errorMsg =
@@ -261,7 +273,7 @@ export const VotingProvider: React.FC<VotingProviderProps> = ({ children }) => {
         setIsSubmitting(false);
       }
     },
-    [voterUid, currentRound, activeProjectId, event?.currentRoundId, navigate]
+    [voterUid, currentRound, activeProjectId, event?.currentRoundId, location.pathname, navigate]
   );
 
   const clearError = useCallback(() => setErrorMessage(null), []);
