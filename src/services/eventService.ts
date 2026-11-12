@@ -85,16 +85,29 @@ function mapProjectRow(row: any): ProjectDocument {
   };
 }
 
+function createTimestamp(dateVal: any) {
+  if (!dateVal) return null;
+  const d = new Date(dateVal);
+  const millis = isNaN(d.getTime()) ? Date.now() : d.getTime();
+  const seconds = Math.floor(millis / 1000);
+  return {
+    seconds,
+    nanoseconds: 0,
+    toMillis: () => millis,
+    toDate: () => new Date(millis),
+  } as any;
+}
+
 function mapRoundRow(row: any): RoundDocument {
   return {
     id: row.id,
     eventId: row.event_id,
     projectId: row.project_id,
     status: row.status,
-    startedAt: row.started_at ? ({ seconds: Math.floor(new Date(row.started_at).getTime() / 1000), nanoseconds: 0 } as any) : null,
-    endedAt: row.ended_at ? ({ seconds: Math.floor(new Date(row.ended_at).getTime() / 1000), nanoseconds: 0 } as any) : null,
-    createdAt: { seconds: Math.floor(new Date(row.created_at || Date.now()).getTime() / 1000), nanoseconds: 0 } as any,
-    updatedAt: { seconds: Math.floor(new Date(row.updated_at || Date.now()).getTime() / 1000), nanoseconds: 0 } as any,
+    startedAt: createTimestamp(row.started_at),
+    endedAt: createTimestamp(row.ended_at),
+    createdAt: createTimestamp(row.created_at || Date.now()),
+    updatedAt: createTimestamp(row.updated_at || Date.now()),
   };
 }
 
@@ -319,6 +332,82 @@ export const EventService = {
 
     const handleOnline = () => {
       fetchRound();
+    };
+    if (typeof window !== 'undefined') {
+      window.addEventListener('online', handleOnline);
+    }
+
+    return () => {
+      isSubscribed = false;
+      supabase.removeChannel(channel);
+      if (typeof window !== 'undefined') {
+        window.removeEventListener('online', handleOnline);
+      }
+    };
+  },
+
+  /**
+   * Monitora a rodada mais recente da competição (seja aberta ou recém-encerrada)
+   * Essencial para o ciclo de vida completo do Telão (Estados 1, 2, 3 e 4)
+   */
+  subscribeToLatestRound(
+    eventId: string,
+    onUpdate: (round: RoundDocument | null) => void,
+    onError?: (err: Error) => void
+  ): Unsubscribe {
+    if (!isSupabaseConfigured) {
+      onUpdate(null);
+      return () => {};
+    }
+
+    let isSubscribed = true;
+
+    const fetchLatest = async () => {
+      try {
+        const { data, error } = await supabase
+          .from('rounds')
+          .select('*')
+          .eq('event_id', eventId)
+          .order('created_at', { ascending: false })
+          .limit(1)
+          .maybeSingle();
+
+        if (!isSubscribed) return;
+        if (error) {
+          if (onError) onError(new Error(error.message));
+          return;
+        }
+
+        if (data) {
+          onUpdate(mapRoundRow(data));
+        } else {
+          onUpdate(null);
+        }
+      } catch (err: any) {
+        if (isSubscribed && onError) onError(err);
+      }
+    };
+
+    fetchLatest();
+
+    const channelId = `latest_round_sub_${eventId}_${Date.now()}`;
+    const channel = supabase
+      .channel(channelId)
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'rounds', filter: `event_id=eq.${eventId}` },
+        () => {
+          fetchLatest();
+        }
+      )
+      .subscribe((status) => {
+        if (status === 'SUBSCRIBED') {
+          fetchLatest();
+        }
+      });
+
+    const handleOnline = () => {
+      fetchLatest();
     };
     if (typeof window !== 'undefined') {
       window.addEventListener('online', handleOnline);
@@ -1112,10 +1201,31 @@ export const EventService = {
       const { data, error } = await query;
       if (error) {
         console.warn('Erro ao consultar votos para ponteiro de aprovação:', error.message);
-        return calculateApprovalStats([]);
       }
 
-      return calculateApprovalStats(data || []);
+      // Consulta complementar à tabela results (pública e consolidada no Supabase)
+      const { data: resRow } = await supabase
+        .from('results')
+        .select('*')
+        .eq('id', `${eventId}_${projectId}`)
+        .maybeSingle();
+
+      const preAgg = resRow
+        ? {
+            totalVotes: Number(resRow.total_votes || 0),
+            averageGeneral: resRow.average_general !== null ? Number(resRow.average_general) : undefined,
+          }
+        : undefined;
+
+      if (data && data.length > 0) {
+        return calculateApprovalStats(data, preAgg);
+      }
+
+      if (preAgg && preAgg.totalVotes && preAgg.totalVotes > 0) {
+        return calculateApprovalStats([], preAgg);
+      }
+
+      return calculateApprovalStats([]);
     } catch (err) {
       console.warn('Falha no cálculo do ponteiro:', err);
       return calculateApprovalStats([]);

@@ -1,5 +1,6 @@
 import React from 'react';
 import { Clock } from 'lucide-react';
+import { formatStopwatch } from '@/utils/approvalCalculator';
 
 export interface RoundTimerProps {
   seconds: number;
@@ -12,12 +13,6 @@ export const RoundTimer: React.FC<RoundTimerProps> = ({
   className = '',
   isActive = true,
 }) => {
-  const formatTime = (totalSeconds: number) => {
-    const mins = Math.floor(totalSeconds / 60);
-    const secs = totalSeconds % 60;
-    return `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
-  };
-
   return (
     <div
       className={`bg-arena-card border border-arena-border rounded-2xl p-4 sm:p-5 flex items-center gap-4 transition-all hover:border-arena-borderLight shadow-md ${className}`}
@@ -31,9 +26,9 @@ export const RoundTimer: React.FC<RoundTimerProps> = ({
           Tempo da rodada
         </div>
         <div className="text-2xl sm:text-3xl font-black font-mono text-white tracking-wider">
-          {formatTime(seconds)}
+          {formatStopwatch(seconds)}
         </div>
-        <div className="text-[11px] text-gray-400 font-medium">tempo decorrido</div>
+        <div className="text-[11px] text-gray-400 font-medium">cronômetro oficial sincronizado</div>
       </div>
     </div>
   );

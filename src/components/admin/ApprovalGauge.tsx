@@ -15,91 +15,43 @@ export interface ApprovalGaugeProps {
   projectCategory?: string;
   roundStatus?: 'aguardando' | 'aberta' | 'encerrada';
   className?: string;
+  compact?: boolean;
 }
 
-// Configuração dos 5 segmentos do semicírculo (baseado na referência visual CPTM/Arena)
-const SEGMENTS = [
-  {
-    startDeg: 180,
-    endDeg: 144,
-    color: '#EF4444', // Vermelho (Rejeição / Negativo)
-    glow: 'rgba(239, 68, 68, 0.4)',
-    label: 'Negativo',
-  },
-  {
-    startDeg: 144,
-    endDeg: 108,
-    color: '#F97316', // Laranja (Levemente Negativo)
-    glow: 'rgba(249, 115, 22, 0.4)',
-    label: 'Abaixo da Média',
-  },
-  {
-    startDeg: 108,
-    endDeg: 72,
-    color: '#FACC15', // Amarelo/Dourado (Neutro / Equilíbrio)
-    glow: 'rgba(250, 204, 21, 0.4)',
-    label: 'Neutro (Nota 3)',
-  },
-  {
-    startDeg: 72,
-    endDeg: 36,
-    color: '#84CC16', // Verde Claro (Levemente Positivo)
-    glow: 'rgba(132, 204, 22, 0.4)',
-    label: 'Favorável',
-  },
-  {
-    startDeg: 36,
-    endDeg: 0,
-    color: '#22C55E', // Verde Esmeralda (Forte Aprovação)
-    glow: 'rgba(34, 197, 94, 0.4)',
-    label: 'Excelente',
-  },
-];
-
-// Helper para converter graus em coordenadas cartesianas SVG
+// Converte graus polares para coordenadas cartesianas (0° no topo, 90° à direita, -90° à esquerda)
 function polarToCartesian(cx: number, cy: number, radius: number, angleInDegrees: number) {
-  const angleInRadians = (angleInDegrees * Math.PI) / 180.0;
+  // Ajuste: 0° na escala do ponteiro é o topo vertical (90° padrão trigonométrico)
+  const trigAngle = (90 - angleInDegrees) * (Math.PI / 180.0);
   return {
-    x: cx + radius * Math.cos(angleInRadians),
-    y: cy - radius * Math.sin(angleInRadians),
+    x: cx + radius * Math.cos(trigAngle),
+    y: cy - radius * Math.sin(trigAngle),
   };
 }
 
-// Gera o path SVG para cada fatia do donut semicircular com pequeno espaçamento
-function describeDonutSlice(
-  cx: number,
-  cy: number,
-  outerRadius: number,
-  innerRadius: number,
-  startAngle: number,
-  endAngle: number,
-  gapAngle = 1.0
-) {
-  const adjStart = startAngle - gapAngle / 2;
-  const adjEnd = endAngle + gapAngle / 2;
-
-  const p1 = polarToCartesian(cx, cy, outerRadius, adjStart);
-  const p2 = polarToCartesian(cx, cy, outerRadius, adjEnd);
-  const p3 = polarToCartesian(cx, cy, innerRadius, adjEnd);
-  const p4 = polarToCartesian(cx, cy, innerRadius, adjStart);
-
-  return `M ${p1.x} ${p1.y} A ${outerRadius} ${outerRadius} 0 0 1 ${p2.x} ${p2.y} L ${p3.x} ${p3.y} A ${innerRadius} ${innerRadius} 0 0 0 ${p4.x} ${p4.y} Z`;
+// Cria arco SVG suave entre dois ângulos de -90° a +90°
+function describeArc(cx: number, cy: number, radius: number, startAngle: number, endAngle: number) {
+  const start = polarToCartesian(cx, cy, radius, startAngle);
+  const end = polarToCartesian(cx, cy, radius, endAngle);
+  const largeArcFlag = Math.abs(endAngle - startAngle) > 180 ? '1' : '0';
+  const sweepFlag = endAngle > startAngle ? '1' : '0';
+  return `M ${start.x} ${start.y} A ${radius} ${radius} 0 ${largeArcFlag} ${sweepFlag} ${end.x} ${end.y}`;
 }
 
 export const ApprovalGauge: React.FC<ApprovalGaugeProps> = ({
   stats,
-  projectName = 'Projeto em Votação',
+  projectName,
   projectCategory,
   roundStatus = 'aberta',
   className = '',
+  compact = false,
 }) => {
   const {
     totalVotes,
     positiveVotes,
     neutralVotes,
     negativeVotes,
-    approvalBalance,
-    indicator,
+    averageGeneral,
+    scalePercent,
     needleAngle,
     tendencyLabel,
     tendencyColor,
@@ -107,255 +59,442 @@ export const ApprovalGauge: React.FC<ApprovalGaugeProps> = ({
 
   const isClosed = roundStatus === 'encerrada';
   const isOpen = roundStatus === 'aberta';
+  const hasVotes = totalVotes > 0;
 
-  // Dimensões do SVG do Medidor
-  const cx = 170;
-  const cy = 160;
-  const outerR = 135;
-  const innerR = 85;
+  // Dimensões do SVG do Medidor Tecnológico
+  const cx = 200;
+  const cy = 175;
+  const rTrack = 130;
+  const rTicks = 142;
 
-  // Paths pré-calculados das 5 faixas coloridas
-  const segmentPaths = useMemo(() => {
-    return SEGMENTS.map((seg) => ({
-      ...seg,
-      path: describeDonutSlice(cx, cy, outerR, innerR, seg.startDeg, seg.endDeg, 1.2),
-    }));
-  }, [cx, cy, outerR, innerR]);
+  // Formatação do Saldo / Escala Percentual com sinal explícito (+ ou -)
+  const formattedScale = useMemo(() => {
+    if (!hasVotes) return '0%';
+    const rounded = Math.round(scalePercent * 10) / 10;
+    return rounded > 0 ? `+${rounded}%` : `${rounded}%`;
+  }, [hasVotes, scalePercent]);
 
-  // Formatação do Saldo de Aprovação com sinal (+ ou -)
-  const formattedBalance = useMemo(() => {
-    if (totalVotes === 0) return '0%';
-    const pct = Math.round(approvalBalance * 100);
-    return pct > 0 ? `+${pct}%` : `${pct}%`;
-  }, [approvalBalance, totalVotes]);
+  // Percentuais de cada categoria de sentimento
+  const posPct = hasVotes ? Math.round((positiveVotes / totalVotes) * 100) : 0;
+  const neuPct = hasVotes ? Math.round((neutralVotes / totalVotes) * 100) : 0;
+  const negPct = hasVotes ? Math.round((negativeVotes / totalVotes) * 100) : 0;
 
   return (
     <div
-      className={`bg-arena-card border border-arena-border rounded-3xl p-5 sm:p-6 shadow-2xl relative overflow-hidden flex flex-col justify-between ${className}`}
+      className={`bg-gradient-to-b from-[#11131F] via-[#0B0C14] to-[#07080D] border border-white/10 rounded-3xl p-5 sm:p-7 shadow-[0_25px_60px_rgba(0,0,0,0.85)] relative overflow-hidden flex flex-col justify-between ${className}`}
     >
-      {/* Luz ambiente de fundo no topo do medidor */}
-      <div className="absolute -top-16 left-1/2 -translate-x-1/2 w-80 h-36 bg-gradient-to-b from-arena-gold/15 via-arena-blue/10 to-transparent blur-3xl pointer-events-none" />
+      {/* Iluminação Ambiente Sofisticada Arena Voice */}
+      <div className="absolute -top-24 left-1/2 -translate-x-1/2 w-96 h-48 bg-arena-red/10 rounded-full blur-[110px] pointer-events-none" />
+      <div className="absolute top-1/2 right-0 w-64 h-64 bg-arena-blue/5 rounded-full blur-[100px] pointer-events-none" />
 
-      {/* 1. Header do Medidor: Identificação do Projeto e Status */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-arena-border/60 pb-4 mb-4 z-10">
-        <div>
-          <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-white/5 border border-white/10 text-[10px] font-bold uppercase tracking-wider text-arena-gold mb-1">
-            <Sparkles className="w-3 h-3 text-arena-gold" />
-            <span>Ponteiro Dinâmico de Aprovação</span>
+      {/* 1. Header do Medidor (quando projectName for informado) */}
+      {projectName && (
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-white/10 pb-4 mb-3 z-10">
+          <div>
+            <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-white/5 border border-white/10 text-[10px] font-black uppercase tracking-wider text-arena-gold mb-1">
+              <Sparkles className="w-3 h-3 text-arena-gold" />
+              <span>Ponteiro Dinâmico de Avaliação</span>
+            </div>
+
+            <h3 className="text-lg sm:text-2xl font-black text-white flex items-center gap-2">
+              <span>{projectName}</span>
+              {projectCategory && (
+                <span className="text-xs font-bold text-gray-400 hidden sm:inline">
+                  • {projectCategory}
+                </span>
+              )}
+            </h3>
           </div>
 
-          <h3 className="text-lg sm:text-xl font-black text-white flex items-center gap-2">
-            <span>{projectName}</span>
-            {projectCategory && (
-              <span className="text-xs font-semibold text-arena-blue hidden sm:inline">
-                • {projectCategory}
-              </span>
+          <div className="shrink-0">
+            {isOpen ? (
+              <div className="inline-flex items-center gap-2 px-3.5 py-1 rounded-full bg-arena-red/15 border border-arena-red/40 text-arena-red text-xs font-black uppercase tracking-wider shadow-neon-glow">
+                <span className="w-2 h-2 rounded-full bg-arena-red animate-ping" />
+                <span>Votação em Tempo Real</span>
+              </div>
+            ) : isClosed ? (
+              <div className="inline-flex items-center gap-1.5 px-3.5 py-1 rounded-full bg-white/5 border border-white/15 text-gray-300 text-xs font-bold uppercase tracking-wider">
+                <Lock className="w-3.5 h-3.5 text-arena-gold" />
+                <span>Resultado Consolidado</span>
+              </div>
+            ) : (
+              <div className="inline-flex items-center gap-1.5 px-3.5 py-1 rounded-full bg-white/5 border border-white/10 text-gray-400 text-xs font-bold">
+                <RadioTower className="w-3.5 h-3.5 text-gray-400" />
+                <span>Aguardando Liberação</span>
+              </div>
             )}
-          </h3>
+          </div>
         </div>
+      )}
 
-        {/* Status Badge */}
-        <div className="shrink-0">
-          {isOpen ? (
-            <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-arena-green/15 border border-arena-green/40 text-arena-green text-xs font-bold shadow-green-glow">
-              <span className="w-2 h-2 rounded-full bg-arena-green animate-ping" />
-              <span>Votação em Tempo Real</span>
-            </div>
-          ) : isClosed ? (
-            <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-gray-800/80 border border-gray-600 text-gray-300 text-xs font-bold">
-              <Lock className="w-3.5 h-3.5 text-arena-gold" />
-              <span>Votação Encerrada (Resultado Final)</span>
-            </div>
-          ) : (
-            <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-white/5 border border-white/10 text-gray-400 text-xs font-bold">
-              <RadioTower className="w-3.5 h-3.5 text-gray-400" />
-              <span>Aguardando Liberação da Rodada</span>
-            </div>
-          )}
-        </div>
-      </div>
-
-      {/* 2. Medidor Semicircular com Ponteiro Analógico Moderno */}
-      <div className="relative flex flex-col items-center justify-center my-1 z-10 select-none">
+      {/* 2. Mostrador Tecnológico Semicircular */}
+      <div className="relative flex flex-col items-center justify-center my-2 z-10 select-none">
         <svg
-          viewBox="0 0 340 190"
-          className="w-full max-w-[340px] h-auto drop-shadow-[0_10px_20px_rgba(0,0,0,0.6)]"
+          viewBox="0 0 400 230"
+          className="w-full max-w-[420px] h-auto drop-shadow-[0_15px_30px_rgba(0,0,0,0.9)]"
         >
           <defs>
-            {/* Gradiente Dourado Metálico do Ponteiro */}
-            <linearGradient id="needleGoldGradient" x1="0%" y1="0%" x2="100%" y2="100%">
-              <stop offset="0%" stopColor="#FEF08A" />
-              <stop offset="50%" stopColor="#EAB308" />
-              <stop offset="100%" stopColor="#CA8A04" />
+            {/* Gradiente Metálico Cromado da Moldura */}
+            <linearGradient id="chromeBezel" x1="0%" y1="0%" x2="100%" y2="0%">
+              <stop offset="0%" stopColor="#475569" />
+              <stop offset="50%" stopColor="#94A3B8" />
+              <stop offset="100%" stopColor="#475569" />
             </linearGradient>
 
-            {/* Gradiente Prata Metálico do Hub Central */}
-            <radialGradient id="hubMetallicGradient" cx="35%" cy="35%" r="65%">
+            {/* Gradiente da Faixa Negativa (Rubi / Arena Red discreto) */}
+            <linearGradient id="negTrackGradient" x1="0%" y1="0%" x2="100%" y2="0%">
+              <stop offset="0%" stopColor="#7F1D1D" stopOpacity="0.8" />
+              <stop offset="100%" stopColor="#E30613" stopOpacity="0.7" />
+            </linearGradient>
+
+            {/* Gradiente da Faixa Positiva (Esmeralda Tecnológico) */}
+            <linearGradient id="posTrackGradient" x1="0%" y1="0%" x2="100%" y2="0%">
+              <stop offset="0%" stopColor="#059669" stopOpacity="0.7" />
+              <stop offset="100%" stopColor="#10B981" stopOpacity="0.85" />
+            </linearGradient>
+
+            {/* Gradiente Dourado Tecnológico para o Ponteiro */}
+            <linearGradient id="needleLaserGradient" x1="0%" y1="0%" x2="0%" y2="100%">
               <stop offset="0%" stopColor="#FFFFFF" />
-              <stop offset="45%" stopColor="#94A3B8" />
-              <stop offset="100%" stopColor="#1E293B" />
+              <stop offset="30%" stopColor="#FEF08A" />
+              <stop offset="70%" stopColor="#F59E0B" />
+              <stop offset="100%" stopColor="#B45309" />
+            </linearGradient>
+
+            {/* Hub Central Cromado Metálico */}
+            <radialGradient id="hubMetallicRing" cx="35%" cy="35%" r="65%">
+              <stop offset="0%" stopColor="#FFFFFF" />
+              <stop offset="45%" stopColor="#CBD5E1" />
+              <stop offset="75%" stopColor="#64748B" />
+              <stop offset="100%" stopColor="#334155" />
             </radialGradient>
 
-            {/* Filtro de Sombra Suave para o Ponteiro */}
-            <filter id="needleShadow" x="-20%" y="-20%" width="140%" height="140%">
-              <feDropShadow dx="0" dy="3" stdDeviation="4" floodColor="#000000" floodOpacity="0.8" />
+            {/* Núcleo de Joia Arena Red do Centro */}
+            <radialGradient id="hubJewelCore" cx="40%" cy="40%" r="60%">
+              <stop offset="0%" stopColor="#FF4D4D" />
+              <stop offset="60%" stopColor="#E30613" />
+              <stop offset="100%" stopColor="#7F1D1D" />
+            </radialGradient>
+
+            <filter id="needleGlow" x="-20%" y="-20%" width="140%" height="140%">
+              <feGaussianBlur stdDeviation="3" result="blur" />
+              <feComposite in="SourceGraphic" in2="blur" operator="over" />
             </filter>
           </defs>
 
-          {/* Arco Escuro de Fundo (Trilho) */}
+          {/* Arco de Fundo: Trilho Metálico Escuro */}
           <path
-            d={describeDonutSlice(cx, cy, outerR + 2, innerR - 2, 180, 0, 0)}
-            fill="#0B111E"
-            stroke="#1E293B"
-            strokeWidth="1.5"
+            d={describeArc(cx, cy, rTrack, -90, 90)}
+            fill="none"
+            stroke="#1E2235"
+            strokeWidth="14"
+            strokeLinecap="round"
           />
 
-          {/* 5 Fatias Coloridas do Semicírculo */}
-          {segmentPaths.map((seg, idx) => (
-            <path
-              key={idx}
-              d={seg.path}
-              fill={seg.color}
-              stroke="#070C16"
-              strokeWidth="2"
-              className="transition-opacity duration-300 hover:opacity-90"
-            />
-          ))}
+          {/* Faixa Negativa (-100% a 0° / -90° a 0°) */}
+          <path
+            d={describeArc(cx, cy, rTrack, -90, -1)}
+            fill="none"
+            stroke="url(#negTrackGradient)"
+            strokeWidth="10"
+            strokeLinecap="butt"
+          />
 
-          {/* Marcadores de Escala (Ticks) */}
-          {/* -100% (Esquerda extrema) */}
-          <line x1="32" y1="160" x2="20" y2="160" stroke="#EF4444" strokeWidth="2.5" strokeLinecap="round" />
-          <text x="14" y="174" fill="#EF4444" fontSize="9" fontWeight="900" textAnchor="middle" fontFamily="monospace">
+          {/* Faixa Positiva (0° a +100% / 0° a +90°) */}
+          <path
+            d={describeArc(cx, cy, rTrack, 1, 90)}
+            fill="none"
+            stroke="url(#posTrackGradient)"
+            strokeWidth="10"
+            strokeLinecap="butt"
+          />
+
+          {/* Marcador Central de Equilíbrio (0% / Média 3.0) */}
+          <line
+            x1={cx}
+            y1={cy - rTrack - 8}
+            x2={cx}
+            y2={cy - rTrack + 8}
+            stroke="#FEF08A"
+            strokeWidth="3.5"
+            strokeLinecap="round"
+          />
+
+          {/* Graduações da Escala Tecnológica (-100%, -50%, 0%, +50%, +100%) */}
+          {[-90, -45, 0, 45, 90].map((deg) => {
+            const inner = polarToCartesian(cx, cy, rTicks - 3, deg);
+            const outer = polarToCartesian(cx, cy, rTicks + 5, deg);
+            const isCenter = deg === 0;
+            return (
+              <line
+                key={deg}
+                x1={inner.x}
+                y1={inner.y}
+                x2={outer.x}
+                y2={outer.y}
+                stroke={isCenter ? '#F59E0B' : '#94A3B8'}
+                strokeWidth={isCenter ? 3 : 1.5}
+                strokeLinecap="round"
+              />
+            );
+          })}
+
+          {/* Rótulos da Escala */}
+          {/* -100% */}
+          <text
+            x="48"
+            y="180"
+            textAnchor="middle"
+            fill="#EF4444"
+            fontSize="11"
+            fontWeight="900"
+            fontFamily="monospace"
+          >
             -100%
           </text>
+          <text
+            x="48"
+            y="194"
+            textAnchor="middle"
+            fill="#7F1D1D"
+            fontSize="8"
+            fontWeight="700"
+            letterSpacing="0.05em"
+          >
+            REJEIÇÃO
+          </text>
 
-          {/* 0% (Centro vertical) */}
-          <line x1="170" y1="23" x2="170" y2="12" stroke="#FACC15" strokeWidth="2.5" strokeLinecap="round" />
-          <text x="170" y="8" fill="#FACC15" fontSize="9" fontWeight="900" textAnchor="middle" fontFamily="monospace">
+          {/* -50% */}
+          <text
+            x="96"
+            y="94"
+            textAnchor="middle"
+            fill="#94A3B8"
+            fontSize="10"
+            fontWeight="700"
+            fontFamily="monospace"
+          >
+            -50%
+          </text>
+
+          {/* 0% (EQUILÍBRIO) */}
+          <text
+            x={cx}
+            y="32"
+            textAnchor="middle"
+            fill="#FEF08A"
+            fontSize="11"
+            fontWeight="900"
+            fontFamily="monospace"
+          >
+            0%
+          </text>
+          <text
+            x={cx}
+            y="44"
+            textAnchor="middle"
+            fill="#D97706"
+            fontSize="8"
+            fontWeight="800"
+            letterSpacing="0.1em"
+          >
             EQUILÍBRIO
           </text>
 
-          {/* +100% (Direita extrema) */}
-          <line x1="308" y1="160" x2="320" y2="160" stroke="#22C55E" strokeWidth="2.5" strokeLinecap="round" />
-          <text x="326" y="174" fill="#22C55E" fontSize="9" fontWeight="900" textAnchor="middle" fontFamily="monospace">
-            +100%
+          {/* +50% */}
+          <text
+            x="304"
+            y="94"
+            textAnchor="middle"
+            fill="#94A3B8"
+            fontSize="10"
+            fontWeight="700"
+            fontFamily="monospace"
+          >
+            +50%
           </text>
 
-          {/* Ponteiro / Agulha Indicadora com Rotação em Torno do Pivot (cx, cy) */}
+          {/* +100% */}
+          <text
+            x="352"
+            y="180"
+            textAnchor="middle"
+            fill="#10B981"
+            fontSize="11"
+            fontWeight="900"
+            fontFamily="monospace"
+          >
+            +100%
+          </text>
+          <text
+            x="352"
+            y="194"
+            textAnchor="middle"
+            fill="#065F46"
+            fontSize="8"
+            fontWeight="700"
+            letterSpacing="0.05em"
+          >
+            APROVAÇÃO
+          </text>
+
+          {/* PONTEIRO ANALÓGICO COM FÍSICA MECÂNICA SUAVE */}
           <g
             style={{
-              transform: `rotate(${needleAngle}deg)`,
               transformOrigin: `${cx}px ${cy}px`,
-              transition: 'transform 0.7s cubic-bezier(0.34, 1.4, 0.64, 1)',
+              transform: `rotate(${needleAngle}deg)`,
+              transition: 'transform 1.2s cubic-bezier(0.34, 1.35, 0.64, 1)',
             }}
-            filter="url(#needleShadow)"
+            filter="url(#needleGlow)"
           >
-            {/* Lâmina da Agulha (Tapered Pointer) */}
+            {/* Sombra da Agulha */}
             <polygon
-              points={`
-                ${cx - 5},${cy - 12}
-                ${cx - 1.5},${cy - 128}
-                ${cx},${cy - 132}
-                ${cx + 1.5},${cy - 128}
-                ${cx + 5},${cy - 12}
-              `}
-              fill="url(#needleGoldGradient)"
-              stroke="#0A0F1D"
-              strokeWidth="1.2"
+              points={`${cx - 3.5},${cy + 12} ${cx + 3.5},${cy + 12} ${cx + 1},${cy - 128} ${cx - 1},${cy - 128}`}
+              fill="rgba(0,0,0,0.6)"
+              transform="translate(2, 4)"
             />
 
-            {/* Linha Central de Destaque da Agulha */}
-            <line x1={cx} y1={cy - 128} x2={cx} y2={cy - 15} stroke="#FFFFFF" strokeWidth="0.8" opacity="0.6" />
+            {/* Corpo da Agulha Metálica Afilada */}
+            <polygon
+              points={`${cx - 4},${cy + 10} ${cx + 4},${cy + 10} ${cx + 1.2},${cy - 130} ${cx - 1.2},${cy - 130}`}
+              fill="url(#needleLaserGradient)"
+              stroke="#B45309"
+              strokeWidth="0.6"
+            />
 
-            {/* Base Circular do Ponteiro */}
-            <circle cx={cx} cy={cy} r="16" fill="url(#needleGoldGradient)" stroke="#050811" strokeWidth="2" />
-            <circle cx={cx} cy={cy} r="10" fill="url(#hubMetallicGradient)" stroke="#0F172A" strokeWidth="1" />
-            <circle cx={cx} cy={cy} r="4" fill="#FFFFFF" />
+            {/* Friso Central Cromado Refletivo da Agulha */}
+            <line
+              x1={cx}
+              y1={cy + 6}
+              x2={cx}
+              y2={cy - 128}
+              stroke="#FFFFFF"
+              strokeWidth="1.2"
+              strokeLinecap="round"
+              opacity="0.95"
+            />
+
+            {/* Ponteira Iluminada */}
+            <circle cx={cx} cy={cy - 130} r="2.2" fill="#FFFFFF" />
           </g>
+
+          {/* HUB CENTRAL MECÂNICO COM RELEVO E JOIA ARENA */}
+          {/* Anel Externo de Sombra */}
+          <circle cx={cx} cy={cy} r="18" fill="#0A0B10" opacity="0.8" />
+          {/* Anel Metálico Cromado */}
+          <circle cx={cx} cy={cy} r="15" fill="url(#hubMetallicRing)" stroke="#1E293B" strokeWidth="1" />
+          {/* Núcleo Rubi Arena Voice */}
+          <circle cx={cx} cy={cy} r="9" fill="url(#hubJewelCore)" />
+          {/* Ponto Central Iluminado */}
+          <circle cx={cx - 2} cy={cy - 2} r="2.5" fill="#FFFFFF" opacity="0.85" />
         </svg>
 
-        {/* Display Central do Indicador Numérico */}
-        <div className="mt-[-8px] flex flex-col items-center text-center space-y-1">
-          <div className="flex items-baseline gap-2">
-            <span className="text-3xl sm:text-4xl font-black font-mono text-white tracking-tight drop-shadow-md">
-              {totalVotes === 0 ? '--' : `${indicator.toFixed(0)}%`}
-            </span>
-            {totalVotes > 0 && (
-              <span
-                className={`text-xs font-mono font-bold px-2 py-0.5 rounded-lg border ${
-                  approvalBalance > 0
-                    ? 'bg-arena-green/20 text-arena-green border-arena-green/40 shadow-green-glow'
-                    : approvalBalance === 0
-                    ? 'bg-arena-gold/20 text-arena-gold border-arena-gold/40'
-                    : 'bg-arena-red/20 text-arena-red border-arena-red/40 shadow-red-glow'
-                }`}
-              >
-                Saldo {formattedBalance}
-              </span>
-            )}
-          </div>
-
+        {/* Leitura Digital Centralizada */}
+        <div className="flex flex-col items-center -mt-6 z-20 space-y-1">
+          {/* Indicador de Tendência / Status */}
           <div
-            className={`text-xs font-extrabold uppercase tracking-wider ${
+            className={`inline-flex items-center gap-1.5 px-3 py-0.5 rounded-full text-xs font-black uppercase tracking-wider border ${
               tendencyColor === 'green'
-                ? 'text-arena-green'
+                ? 'bg-emerald-950/70 text-emerald-400 border-emerald-500/40 shadow-[0_0_15px_rgba(16,185,129,0.25)]'
                 : tendencyColor === 'red'
-                ? 'text-arena-red'
-                : tendencyColor === 'gold'
-                ? 'text-arena-gold'
-                : 'text-gray-400'
+                ? 'bg-rose-950/70 text-rose-400 border-rose-500/40 shadow-[0_0_15px_rgba(239,68,68,0.25)]'
+                : 'bg-amber-950/60 text-amber-300 border-amber-500/30'
             }`}
           >
-            {tendencyLabel}
+            <span
+              className={`w-1.5 h-1.5 rounded-full ${
+                tendencyColor === 'green'
+                  ? 'bg-emerald-400 animate-pulse'
+                  : tendencyColor === 'red'
+                  ? 'bg-rose-400 animate-pulse'
+                  : 'bg-amber-400'
+              }`}
+            />
+            <span>{hasVotes ? tendencyLabel : 'AGUARDANDO PRIMEIROS VOTOS'}</span>
+          </div>
+
+          {/* Média Consolidada e Escala (-100% a +100%) */}
+          <div className="flex items-baseline gap-3 pt-1">
+            <div className="flex items-baseline gap-1">
+              <span className="text-3xl sm:text-4xl font-black font-mono text-white tracking-tight">
+                {hasVotes ? averageGeneral.toFixed(2) : '—'}
+              </span>
+              <span className="text-xs font-bold text-gray-400 uppercase">/ 5.0</span>
+            </div>
+
+            <div className="h-6 w-px bg-white/10" />
+
+            <div className="flex items-center gap-1.5 px-2.5 py-0.5 rounded-lg bg-white/5 border border-white/10 font-mono text-xs sm:text-sm font-black text-arena-gold">
+              <span>Escala:</span>
+              <span>{formattedScale}</span>
+            </div>
           </div>
         </div>
       </div>
 
-      {/* 3. Métricas Complementares (Total, Positivos, Neutros, Negativos e Saldo) */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 pt-4 mt-3 border-t border-arena-border/60 z-10">
-        {/* Card 1: Total de Votos */}
-        <div className="bg-arena-black/60 border border-arena-border/70 rounded-2xl p-2.5 sm:p-3 text-center">
-          <div className="text-[10px] uppercase tracking-wider text-gray-400 font-bold mb-0.5">
-            Total de Votos
+      {/* 3. Grid de Cartões de Métricas Detalhadas */}
+      {!compact && (
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 sm:gap-3 mt-4 pt-4 border-t border-white/10 z-10">
+          {/* Card Total de Votos */}
+          <div className="bg-white/[0.03] border border-white/10 rounded-2xl p-3 flex flex-col justify-between">
+            <span className="text-[10px] font-bold uppercase tracking-wider text-gray-400">
+              Total Válido
+            </span>
+            <div className="text-xl sm:text-2xl font-black font-mono text-white mt-1">
+              {totalVotes}
+            </div>
+            <span className="text-[10px] text-gray-500 font-medium">100% auditado</span>
           </div>
-          <div className="text-lg sm:text-xl font-black font-mono text-white">
-            {totalVotes}
-          </div>
-        </div>
 
-        {/* Card 2: Votos Positivos (Média > 3) */}
-        <div className="bg-arena-green/10 border border-arena-green/30 rounded-2xl p-2.5 sm:p-3 text-center">
-          <div className="text-[10px] uppercase tracking-wider text-arena-green font-bold flex items-center justify-center gap-1 mb-0.5">
-            <ThumbsUp className="w-3 h-3" />
-            <span>Positivos (&gt;3)</span>
+          {/* Card Votos Positivos */}
+          <div className="bg-emerald-950/20 border border-emerald-500/30 rounded-2xl p-3 flex flex-col justify-between">
+            <div className="flex items-center justify-between">
+              <span className="text-[10px] font-bold uppercase tracking-wider text-emerald-400">
+                Positivos (&gt;3)
+              </span>
+              <ThumbsUp className="w-3.5 h-3.5 text-emerald-400" />
+            </div>
+            <div className="text-xl sm:text-2xl font-black font-mono text-emerald-300 mt-1">
+              {positiveVotes}
+            </div>
+            <span className="text-[10px] text-emerald-400/80 font-bold font-mono">
+              {posPct}% do total
+            </span>
           </div>
-          <div className="text-lg sm:text-xl font-black font-mono text-arena-green">
-            {positiveVotes}
-          </div>
-        </div>
 
-        {/* Card 3: Votos Neutros (Média == 3) */}
-        <div className="bg-arena-gold/10 border border-arena-gold/30 rounded-2xl p-2.5 sm:p-3 text-center">
-          <div className="text-[10px] uppercase tracking-wider text-arena-gold font-bold flex items-center justify-center gap-1 mb-0.5">
-            <Minus className="w-3 h-3" />
-            <span>Neutros (=3)</span>
+          {/* Card Votos Neutros */}
+          <div className="bg-amber-950/20 border border-amber-500/30 rounded-2xl p-3 flex flex-col justify-between">
+            <div className="flex items-center justify-between">
+              <span className="text-[10px] font-bold uppercase tracking-wider text-amber-300">
+                Neutros (=3)
+              </span>
+              <Minus className="w-3.5 h-3.5 text-amber-300" />
+            </div>
+            <div className="text-xl sm:text-2xl font-black font-mono text-amber-200 mt-1">
+              {neutralVotes}
+            </div>
+            <span className="text-[10px] text-amber-300/80 font-bold font-mono">
+              {neuPct}% do total
+            </span>
           </div>
-          <div className="text-lg sm:text-xl font-black font-mono text-arena-gold">
-            {neutralVotes}
-          </div>
-        </div>
 
-        {/* Card 4: Votos Negativos (Média < 3) */}
-        <div className="bg-arena-red/10 border border-arena-red/30 rounded-2xl p-2.5 sm:p-3 text-center">
-          <div className="text-[10px] uppercase tracking-wider text-arena-red font-bold flex items-center justify-center gap-1 mb-0.5">
-            <ThumbsDown className="w-3 h-3" />
-            <span>Negativos (&lt;3)</span>
-          </div>
-          <div className="text-lg sm:text-xl font-black font-mono text-arena-red">
-            {negativeVotes}
+          {/* Card Votos Negativos */}
+          <div className="bg-rose-950/20 border border-rose-500/30 rounded-2xl p-3 flex flex-col justify-between">
+            <div className="flex items-center justify-between">
+              <span className="text-[10px] font-bold uppercase tracking-wider text-rose-400">
+                Negativos (&lt;3)
+              </span>
+              <ThumbsDown className="w-3.5 h-3.5 text-rose-400" />
+            </div>
+            <div className="text-xl sm:text-2xl font-black font-mono text-rose-300 mt-1">
+              {negativeVotes}
+            </div>
+            <span className="text-[10px] text-rose-400/80 font-bold font-mono">
+              {negPct}% do total
+            </span>
           </div>
         </div>
-      </div>
+      )}
     </div>
   );
 };

@@ -2,8 +2,15 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { ArenaLogo, ArenaMascot } from '@/components/branding';
 import { QRCodeDisplay } from '@/components/qrcode';
+import { ApprovalGauge } from '@/components/admin/ApprovalGauge';
 import { EventService, DEFAULT_EVENT_ID } from '@/services/eventService';
 import { ProjectDocument, RoundDocument, ResultDocument, EventDocument } from '@/types';
+import {
+  ApprovalStats,
+  calculateApprovalStats,
+  parseRoundStartMillis,
+  formatStopwatch,
+} from '@/utils/approvalCalculator';
 import { buildRankedResults } from '@/utils/scoring';
 import {
   Trophy,
@@ -16,6 +23,8 @@ import {
   Flame,
   Users,
   Timer,
+  Lock,
+  CheckCircle2,
 } from 'lucide-react';
 
 export const BigScreenPresentationPage: React.FC = () => {
@@ -28,8 +37,9 @@ export const BigScreenPresentationPage: React.FC = () => {
   const [resultsList, setResultsList] = useState<ResultDocument[]>([]);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
+  const [approvalStats, setApprovalStats] = useState<ApprovalStats>(() => calculateApprovalStats([]));
 
-  // 1. Escuta o evento em tempo real
+  // 1. Escuta o evento principal em tempo real
   useEffect(() => {
     const unsub = EventService.subscribeToCurrentEvent(DEFAULT_EVENT_ID, (ev) => {
       if (ev) setActiveEvent(ev);
@@ -45,20 +55,15 @@ export const BigScreenPresentationPage: React.FC = () => {
     return () => unsub();
   }, []);
 
-  // 3. Escuta a rodada ativa em tempo real
-  const roundId = activeEvent?.currentRoundId;
+  // 3. Monitora o ciclo de vida completo da rodada (Aguardando -> Aberta -> Encerrada -> Nova Rodada)
   useEffect(() => {
-    if (!roundId) {
-      setActiveRound(null);
-      return;
-    }
-    const unsub = EventService.subscribeToActiveRound(roundId, (round) => {
-      if (round) setActiveRound(round);
+    const unsub = EventService.subscribeToLatestRound(DEFAULT_EVENT_ID, (round) => {
+      setActiveRound(round);
     });
     return () => unsub();
-  }, [roundId]);
+  }, []);
 
-  // 4. Escuta todos os resultados agregados em tempo real
+  // 4. Escuta os resultados agregados de todos os projetos em tempo real
   useEffect(() => {
     const unsub = EventService.subscribeToAllEventResults(DEFAULT_EVENT_ID, (resList) => {
       if (resList && resList.length > 0) {
@@ -68,64 +73,105 @@ export const BigScreenPresentationPage: React.FC = () => {
     return () => unsub();
   }, []);
 
-  // 5. Cronômetro da Rodada Oficial (Baseado em startedAt do servidor — não zera no refresh)
+  // 5. Projeto Ativo na Rodada
+  const activeProject = useMemo(() => {
+    if (!activeRound?.projectId && !activeEvent?.currentProjectId) return null;
+    const targetId = activeRound?.projectId || activeEvent?.currentProjectId;
+    return projects.find((p) => p.id === targetId) || null;
+  }, [activeRound?.projectId, activeEvent?.currentProjectId, projects]);
+
+  // 6. Ponteiro Dinâmico: Sincronização em tempo real para o projeto ativo
   useEffect(() => {
-    if (activeRound?.status !== 'open' || !activeRound?.startedAt) {
-      if (activeRound?.status !== 'open') setElapsedSeconds(0);
+    if (!activeProject?.id) {
+      setApprovalStats(calculateApprovalStats([]));
       return;
     }
 
-    const startedMillis = activeRound.startedAt.toMillis
-      ? activeRound.startedAt.toMillis()
-      : typeof activeRound.startedAt === 'number'
-      ? activeRound.startedAt
-      : Date.now();
+    const unsub = EventService.subscribeToProjectApprovalStats(
+      DEFAULT_EVENT_ID,
+      activeProject.id,
+      activeRound?.id,
+      (newStats) => {
+        setApprovalStats(newStats);
+      }
+    );
 
+    return () => unsub();
+  }, [activeProject?.id, activeRound?.id]);
+
+  // 7. Cronômetro Oficial do Servidor (Baseado em startedAt e endedAt — imune a refresh e reconexões)
+  useEffect(() => {
+    if (!activeRound?.startedAt) {
+      setElapsedSeconds(0);
+      return;
+    }
+
+    const startMillis = parseRoundStartMillis(activeRound.startedAt);
+    if (!startMillis) {
+      setElapsedSeconds(0);
+      return;
+    }
+
+    // ESTADO 3 (Fim da Rodada): O cronômetro congela na duração final
+    if (activeRound.status === 'closed') {
+      const endMillis = activeRound.endedAt ? parseRoundStartMillis(activeRound.endedAt) : Date.now();
+      const finalDiff = Math.max(0, Math.floor((endMillis - startMillis) / 1000));
+      setElapsedSeconds(finalDiff);
+      return;
+    }
+
+    // Se não estiver aberta, mantém zerado
+    if (activeRound.status !== 'open') {
+      setElapsedSeconds(0);
+      return;
+    }
+
+    // ESTADO 2 (Rodada Aberta): Atualiza a cada segundo com precisão absoluta
     const updateTimer = () => {
       const now = Date.now();
-      const diff = Math.max(0, Math.floor((now - startedMillis) / 1000));
+      const diff = Math.max(0, Math.floor((now - startMillis) / 1000));
       setElapsedSeconds(diff);
     };
 
     updateTimer();
     const interval = setInterval(updateTimer, 1000);
     return () => clearInterval(interval);
-  }, [activeRound?.status, activeRound?.startedAt]);
+  }, [activeRound?.status, activeRound?.startedAt, activeRound?.endedAt]);
 
-  // Ranking calculado
+  // 8. Determina o modo exibido: 'qrcode' | 'round' | 'ranking'
+  const displayMode = useMemo(() => {
+    if (currentModeParam !== 'auto') {
+      return currentModeParam;
+    }
+
+    // Se os resultados finais estiverem publicados, vai para o Pódio Oficial
+    if (activeEvent?.resultsPublished) {
+      return 'ranking';
+    }
+
+    // Se houver rodada aberta ou encerrada com projeto, apresenta a experiência de rodada
+    if (activeRound?.status === 'open' || activeRound?.status === 'closed') {
+      return 'round';
+    }
+
+    // Caso padrão: QR code e espera de liberação
+    return 'qrcode';
+  }, [currentModeParam, activeEvent?.resultsPublished, activeRound?.status]);
+
+  // Ranking calculado para o Pódio
   const rankedResults = useMemo(() => {
     const resultsMap = new Map<string, ResultDocument>();
     resultsList.forEach((r) => resultsMap.set(r.projectId, r));
     return buildRankedResults(projects, resultsMap);
   }, [projects, resultsList]);
 
-  // Projeto ativo na rodada
-  const activeProject = useMemo(() => {
-    const projId = activeRound?.projectId || activeEvent?.currentProjectId;
-    return projects.find((p) => p.id === projId) || null;
-  }, [activeRound?.projectId, activeEvent?.currentProjectId, projects]);
-
   // Votos da rodada ativa
-  const activeProjectVotes = useMemo(() => {
+  const roundVotesCount = useMemo(() => {
+    if (approvalStats.totalVotes > 0) return approvalStats.totalVotes;
     if (!activeProject?.id) return 0;
     const res = resultsList.find((r) => r.projectId === activeProject.id);
     return res?.totalVotes || 0;
-  }, [activeProject?.id, resultsList]);
-
-  // Determina o modo exibido: 'qrcode' | 'round' | 'ranking'
-  const displayMode = useMemo(() => {
-    if (currentModeParam !== 'auto') {
-      return currentModeParam;
-    }
-    // Lógica inteligente do modo AUTO:
-    if (activeEvent?.resultsPublished) {
-      return 'ranking';
-    }
-    if (activeRound?.status === 'open') {
-      return 'round';
-    }
-    return 'qrcode';
-  }, [currentModeParam, activeEvent?.resultsPublished, activeRound?.status]);
+  }, [approvalStats.totalVotes, activeProject?.id, resultsList]);
 
   const toggleFullscreen = () => {
     if (!document.fullscreenElement) {
@@ -135,36 +181,46 @@ export const BigScreenPresentationPage: React.FC = () => {
     }
   };
 
-  const formatTimer = (totalSeconds: number) => {
-    const m = Math.floor(totalSeconds / 60);
-    const s = totalSeconds % 60;
-    return `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
-  };
+  const isRoundOpen = activeRound?.status === 'open';
+  const isRoundClosed = activeRound?.status === 'closed';
 
   return (
-    <div className="min-h-screen bg-arena-black text-white p-4 sm:p-8 flex flex-col justify-between relative overflow-hidden select-none">
-      {/* Background Stage Atmosfera */}
-      <div className="absolute top-0 left-1/4 w-[600px] h-[400px] bg-arena-red/15 blur-[140px] pointer-events-none" />
-      <div className="absolute top-1/3 right-1/4 w-[600px] h-[400px] bg-arena-blue/15 blur-[140px] pointer-events-none" />
-      <div className="absolute -bottom-24 -right-16 opacity-10 pointer-events-none">
-        <ArenaMascot variant="transparent" width={540} />
+    <div className="min-h-screen bg-[#07080D] text-white p-4 sm:p-6 lg:p-8 flex flex-col justify-between relative overflow-hidden select-none">
+      {/* Background Stage Atmosfera Futurista Arena Voice */}
+      <div className="absolute top-0 left-1/4 w-[700px] h-[450px] bg-arena-red/12 blur-[160px] pointer-events-none" />
+      <div className="absolute top-1/3 right-1/4 w-[600px] h-[400px] bg-arena-blue/10 blur-[150px] pointer-events-none" />
+      <div className="absolute -bottom-24 -right-16 opacity-5 pointer-events-none">
+        <ArenaMascot variant="transparent" width={560} />
       </div>
 
       {/* Header do Telão (16:9) */}
-      <header className="flex flex-col sm:flex-row items-center justify-between gap-4 border-b border-arena-border/60 pb-4 relative z-10">
+      <header className="flex flex-col sm:flex-row items-center justify-between gap-4 border-b border-white/10 pb-4 relative z-10">
         <ArenaLogo variant="complete" width={320} />
 
         <div className="flex items-center gap-4">
-          {/* Indicador de Status do Modo */}
-          <div className="hidden sm:inline-flex items-center gap-2 px-3 py-1 rounded-full bg-black/60 border border-arena-border text-xs font-bold uppercase tracking-wider">
-            <RadioTower className="w-3.5 h-3.5 text-arena-red animate-pulse" />
-            <span>
-              {displayMode === 'round'
-                ? 'Rodada ao Vivo'
-                : displayMode === 'ranking'
-                ? 'Pódio Oficial'
-                : 'QR Code de Entrada'}
-            </span>
+          {/* Indicador de Status do Telão */}
+          <div className="inline-flex items-center gap-2 px-3.5 py-1 rounded-full bg-black/70 border border-white/15 text-xs font-black uppercase tracking-wider">
+            {displayMode === 'round' && isRoundOpen ? (
+              <>
+                <span className="w-2.5 h-2.5 rounded-full bg-arena-red animate-ping" />
+                <span className="text-arena-red font-mono">Votação ao Vivo no Palco</span>
+              </>
+            ) : displayMode === 'round' && isRoundClosed ? (
+              <>
+                <Lock className="w-3.5 h-3.5 text-arena-gold" />
+                <span className="text-gray-300">Fim da Rodada</span>
+              </>
+            ) : displayMode === 'ranking' ? (
+              <>
+                <Trophy className="w-3.5 h-3.5 text-arena-gold" />
+                <span className="text-arena-gold">Pódio Oficial</span>
+              </>
+            ) : (
+              <>
+                <RadioTower className="w-3.5 h-3.5 text-gray-400" />
+                <span className="text-gray-400">Aguardando Liberação</span>
+              </>
+            )}
           </div>
 
           <button
@@ -178,62 +234,115 @@ export const BigScreenPresentationPage: React.FC = () => {
       </header>
 
       {/* ============================================================ */}
-      {/* MODO 1: QR CODE DE ENTRADA DO PÚBLICO                         */}
+      {/* ESTADO 1: AGUARDANDO LIBERAÇÃO DO PRÓXIMO PROJETO            */}
       {/* ============================================================ */}
       {displayMode === 'qrcode' && (
-        <main className="flex-1 flex flex-col items-center justify-center py-6 sm:py-8 z-10 text-center space-y-6 animate-fade-in max-w-4xl mx-auto">
-          <div className="space-y-2">
-            <div className="inline-flex items-center gap-2 px-3.5 py-1 rounded-full bg-arena-gold/15 text-arena-gold border border-arena-gold/30 text-xs font-black uppercase tracking-widest">
-              <Sparkles className="w-3.5 h-3.5" />
-              <span>Participe da Avaliação dos Projetos</span>
+        <main className="flex-1 flex flex-col items-center justify-center py-6 sm:py-10 z-10 text-center space-y-6 animate-fade-in max-w-4xl mx-auto w-full">
+          <div className="space-y-3">
+            <div className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full bg-arena-gold/15 text-arena-gold border border-arena-gold/30 text-xs font-black uppercase tracking-widest shadow-gold-glow">
+              <Sparkles className="w-4 h-4 text-arena-gold" />
+              <span>Arena Voice 2026 • Palco Principal</span>
             </div>
-            <h1 className="text-3xl sm:text-5xl font-black tracking-tight text-white uppercase">
+
+            <h1 className="text-4xl sm:text-6xl font-black tracking-tight text-white uppercase">
               VOTO <span className="text-arena-red">POPULAR</span>
             </h1>
-            <p className="text-sm sm:text-lg text-gray-300 max-w-lg mx-auto font-medium">
-              Aponte a câmera do seu celular para entrar na arena de votação.
+
+            <div className="inline-block px-4 py-1 rounded-xl bg-white/5 border border-white/10 text-gray-300 text-sm sm:text-base font-bold uppercase tracking-wider">
+              Aguardando Liberação do Próximo Projeto
+            </div>
+
+            <p className="text-sm sm:text-lg text-gray-300 max-w-xl mx-auto font-medium leading-relaxed">
+              Aponte a câmera do seu celular para entrar na arena de votação e aguarde o início da apresentação no palco.
             </p>
           </div>
 
-          <div className="p-3 bg-gradient-to-b from-arena-gold/30 via-transparent to-arena-red/30 rounded-[36px] shadow-gold-glow">
+          {/* QR Code com borda elegante */}
+          <div className="p-4 bg-gradient-to-b from-arena-red/30 via-white/5 to-arena-gold/30 rounded-[40px] shadow-[0_20px_60px_rgba(227,6,19,0.25)] border border-white/20">
             <QRCodeDisplay size={280} showActions={false} />
           </div>
 
-          <p className="text-xs text-gray-400 font-mono">
-            Acesso único garantido • Mantenha o navegador aberto no seu smartphone
-          </p>
+          <div className="space-y-1 text-xs text-gray-400 font-mono">
+            <p>Conexão atômica e segura via Supabase • Um voto por participante por projeto</p>
+            <p className="text-gray-500">Mantenha a página aberta no seu smartphone para votar instantaneamente</p>
+          </div>
         </main>
       )}
 
       {/* ============================================================ */}
-      {/* MODO 2: RODADA AO VIVO (PROJETO NO PALCO & VOTAÇÃO EM TEMPO REAL) */}
+      {/* ESTADOS 2 E 3: PROJETO LIBERADO / VOTAÇÃO ATIVA OU FIM RODADA*/}
       {/* ============================================================ */}
       {displayMode === 'round' && (
-        <main className="flex-1 flex flex-col justify-center py-6 z-10 max-w-6xl mx-auto w-full animate-fade-in">
-          <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-center">
-            {/* Lado Esquerdo: Banner e Detalhes do Projeto Ativo (8 colunas) */}
-            <div className="lg:col-span-7 space-y-4">
-              <div className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-arena-red/20 text-arena-red border border-arena-red/40 text-xs font-black uppercase tracking-wider animate-pulse">
-                <Flame className="w-4 h-4" />
-                <span>Votação Aberta Agora no Palco</span>
+        <main className="flex-1 flex flex-col justify-center py-4 sm:py-6 z-10 max-w-7xl mx-auto w-full animate-fade-in">
+          {/* BANNER DE TRANSIÇÃO: ESTADO 3 — FIM DA RODADA DE VOTAÇÃO */}
+          {isRoundClosed && (
+            <div className="mb-4 p-4 sm:p-5 rounded-2xl bg-gradient-to-r from-arena-red/25 via-[#7F1D1D]/30 to-arena-black border-2 border-arena-red/80 shadow-[0_10px_35px_rgba(227,6,19,0.35)] flex flex-col sm:flex-row items-center justify-between gap-3 text-center sm:text-left animate-pulse">
+              <div className="flex items-center gap-3">
+                <div className="w-12 h-12 rounded-xl bg-arena-red text-white flex items-center justify-center shadow-neon-glow shrink-0">
+                  <Lock className="w-6 h-6" />
+                </div>
+                <div>
+                  <h3 className="text-lg sm:text-xl font-black text-white uppercase tracking-wider">
+                    FIM DA RODADA DE VOTAÇÃO
+                  </h3>
+                  <p className="text-xs sm:text-sm text-gray-200 font-medium">
+                    A votação deste projeto foi encerrada. Aguarde a liberação do próximo projeto.
+                  </p>
+                </div>
               </div>
 
-              <div className="space-y-1">
-                <span className="text-xs uppercase font-extrabold text-arena-blueLight tracking-widest">
-                  Projeto #{activeProject?.order || 1}
-                </span>
-                <h2 className="text-3xl sm:text-4xl font-black text-white leading-tight">
-                  {activeProject?.name || 'Projeto em Apresentação'}
-                </h2>
+              <div className="shrink-0 px-4 py-1.5 rounded-full bg-white/10 border border-white/20 text-xs font-bold font-mono text-arena-gold">
+                Resultado Oficial Congelado
+              </div>
+            </div>
+          )}
+
+          {/* Grid Principal 16:9 do Telão */}
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 sm:gap-6 items-stretch">
+            {/* LADO ESQUERDO: BANNER OFICIAL E DADOS DO PROJETO (5 colunas) */}
+            <div className="lg:col-span-5 flex flex-col justify-between space-y-4">
+              <div className="space-y-3">
+                {/* Badge de Status da Rodada */}
+                <div className="flex items-center gap-2">
+                  {isRoundOpen ? (
+                    <div className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-arena-red/20 text-arena-red border border-arena-red/50 text-xs font-black uppercase tracking-wider shadow-neon-glow animate-pulse">
+                      <Flame className="w-4 h-4 text-arena-red" />
+                      <span>Votação Aberta Agora no Palco</span>
+                    </div>
+                  ) : (
+                    <div className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-white/10 text-gray-300 border border-white/20 text-xs font-black uppercase tracking-wider">
+                      <CheckCircle2 className="w-4 h-4 text-arena-gold" />
+                      <span>Projeto Concluído nesta Rodada</span>
+                    </div>
+                  )}
+
+                  <span className="text-xs uppercase font-extrabold text-arena-gold tracking-widest font-mono">
+                    #{activeProject?.order || 1}
+                  </span>
+                </div>
+
+                {/* Título e Categoria */}
+                <div>
+                  <h2 className="text-2xl sm:text-4xl font-black text-white leading-tight">
+                    {activeProject?.name || 'Projeto em Apresentação'}
+                  </h2>
+                  {activeProject?.category && (
+                    <span className="inline-block mt-1 text-xs sm:text-sm font-bold text-arena-blueLight">
+                      {activeProject.category}
+                    </span>
+                  )}
+                </div>
+
+                {/* Descrição Oficial do Projeto */}
                 {activeProject?.description && (
-                  <p className="text-sm sm:text-base text-gray-300 leading-relaxed pt-1">
+                  <p className="text-xs sm:text-sm text-gray-300 leading-relaxed line-clamp-3">
                     {activeProject.description}
                   </p>
                 )}
               </div>
 
-              {/* Banner do Projeto com Borda Neon */}
-              <div className="relative h-56 sm:h-72 rounded-2xl overflow-hidden border-2 border-arena-red/50 shadow-neon-glow bg-arena-card">
+              {/* Banner Oficial do Projeto (Proporções 16:9, sem distorção) */}
+              <div className="relative aspect-video rounded-2xl overflow-hidden border-2 border-arena-red/50 shadow-[0_15px_40px_rgba(0,0,0,0.8)] bg-gradient-to-br from-[#0F111A] via-[#0A0B10] to-[#161824] flex items-center justify-center">
                 {activeProject?.bannerUrl ? (
                   <img
                     src={activeProject.bannerUrl}
@@ -241,68 +350,81 @@ export const BigScreenPresentationPage: React.FC = () => {
                     className="w-full h-full object-cover"
                   />
                 ) : (
-                  <div className="w-full h-full flex flex-col items-center justify-center p-6 text-center bg-gradient-to-br from-arena-navy via-arena-black to-arena-card">
-                    <ArenaLogo variant="textWithSlogan" width={280} />
-                    <span className="text-sm font-bold text-gray-400 mt-2">
-                      Avalie: Inovação • Impacto CPTM • Salto Tecnológico
+                  <div className="w-full h-full flex flex-col items-center justify-center p-6 text-center">
+                    <ArenaLogo variant="textWithSlogan" width={260} />
+                    <span className="text-xs font-bold text-gray-400 mt-2 uppercase tracking-wider">
+                      Arena Voice • Inovação Ferroviária CPTM
                     </span>
                   </div>
                 )}
               </div>
-            </div>
-
-            {/* Lado Direito: Cronômetro, Contador de Votos e Mini QR Code (5 colunas) */}
-            <div className="lg:col-span-5 flex flex-col gap-4">
-              {/* Card de Votos em Tempo Real */}
-              <div className="p-6 rounded-3xl bg-arena-card/90 border border-arena-border/80 shadow-2xl relative overflow-hidden space-y-3">
-                <div className="absolute top-0 right-0 w-32 h-32 bg-arena-red/10 rounded-full blur-2xl pointer-events-none" />
-                <div className="flex items-center justify-between">
-                  <span className="text-xs font-extrabold uppercase text-gray-400 tracking-wider">
-                    Votos Recebidos
-                  </span>
-                  <Users className="w-5 h-5 text-arena-red" />
-                </div>
-                <div className="text-5xl sm:text-6xl font-black text-white font-mono tracking-tight animate-fade-in">
-                  {activeProjectVotes}
-                </div>
-                <div className="w-full h-2 rounded-full bg-white/10 overflow-hidden">
-                  <div
-                    className="h-full bg-gradient-to-r from-arena-red to-arena-blue transition-all duration-700"
-                    style={{ width: `${Math.min(100, (activeProjectVotes / 150) * 100)}%` }}
-                  />
-                </div>
-                <p className="text-[11px] text-gray-400">
-                  Atualização atômica em tempo real sincronizada com os smartphones da plateia.
-                </p>
-              </div>
-
-              {/* Card do Cronômetro Oficial do Servidor */}
-              <div className="p-5 rounded-3xl bg-arena-card/90 border border-arena-border/80 shadow-2xl flex items-center justify-between">
-                <div>
-                  <span className="text-xs font-extrabold uppercase text-gray-400 tracking-wider block">
-                    Tempo de Votação
-                  </span>
-                  <span className="text-3xl sm:text-4xl font-black text-arena-gold font-mono">
-                    {formatTimer(elapsedSeconds)}
-                  </span>
-                </div>
-                <div className="w-14 h-14 rounded-2xl bg-arena-gold/15 border border-arena-gold/30 flex items-center justify-center text-arena-gold">
-                  <Timer className="w-7 h-7 animate-pulse" />
-                </div>
-              </div>
 
               {/* Mini QR Code para retardatários */}
-              <div className="p-4 rounded-3xl bg-arena-card/60 border border-arena-border/60 flex items-center gap-4">
-                <div className="p-2 bg-white rounded-xl shrink-0">
-                  <QRCodeDisplay size={80} showActions={false} />
+              <div className="p-3.5 rounded-2xl bg-white/[0.03] border border-white/10 flex items-center gap-3.5 shadow-lg">
+                <div className="p-1.5 bg-white rounded-xl shrink-0">
+                  <QRCodeDisplay size={70} showActions={false} />
                 </div>
                 <div>
-                  <h4 className="text-xs font-bold text-white">Não votou ainda?</h4>
-                  <p className="text-[11px] text-gray-400">
-                    Aponte seu celular para o código ao lado e envie sua nota antes do encerramento.
+                  <h4 className="text-xs font-bold text-white flex items-center gap-1.5">
+                    <span>Ainda não votou?</span>
+                    {isRoundOpen && <span className="text-arena-red animate-pulse">• Aberto</span>}
+                  </h4>
+                  <p className="text-[11px] text-gray-400 leading-snug mt-0.5">
+                    Aponte seu smartphone para o código ao lado e avalie nos 3 critérios oficiais antes do encerramento.
                   </p>
                 </div>
               </div>
+            </div>
+
+            {/* LADO DIREITO: CRONÔMETRO, PONTEIRO DINÂMICO E MÉTRICAS (7 colunas) */}
+            <div className="lg:col-span-7 flex flex-col justify-between space-y-4">
+              {/* Cronômetro Oficial do Servidor e Contador de Votos Sincronizados */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
+                {/* Cronômetro Oficial (00:00:00) */}
+                <div className="p-4 rounded-3xl bg-gradient-to-r from-[#12141F] via-[#0F1118] to-[#12141F] border border-white/15 shadow-xl flex items-center justify-between">
+                  <div className="space-y-0.5">
+                    <span className="text-[10px] font-extrabold uppercase text-gray-400 tracking-wider block">
+                      Cronômetro Oficial
+                    </span>
+                    <div className="text-3xl sm:text-4xl font-black text-arena-gold font-mono tracking-wider">
+                      {formatStopwatch(elapsedSeconds)}
+                    </div>
+                    <span className="text-[9px] text-gray-500 font-medium">
+                      {isRoundOpen ? 'Contagem ativa • startedAt' : 'Tempo final gravado'}
+                    </span>
+                  </div>
+
+                  <div className="w-12 h-12 rounded-2xl bg-arena-gold/15 border border-arena-gold/30 flex items-center justify-center text-arena-gold shadow-gold-glow shrink-0">
+                    <Timer className={`w-6 h-6 ${isRoundOpen ? 'animate-pulse' : ''}`} />
+                  </div>
+                </div>
+
+                {/* Votos Confirmados em Tempo Real */}
+                <div className="p-4 rounded-3xl bg-gradient-to-r from-[#12141F] via-[#0F1118] to-[#12141F] border border-white/15 shadow-xl flex items-center justify-between">
+                  <div className="space-y-0.5">
+                    <span className="text-[10px] font-extrabold uppercase text-gray-400 tracking-wider block">
+                      Votos Confirmados
+                    </span>
+                    <div className="text-3xl sm:text-4xl font-black text-white font-mono tracking-wider">
+                      {roundVotesCount}
+                    </div>
+                    <span className="text-[9px] text-gray-500 font-medium">
+                      Auditados via Supabase
+                    </span>
+                  </div>
+
+                  <div className="w-12 h-12 rounded-2xl bg-arena-red/15 border border-arena-red/30 flex items-center justify-center text-arena-red shadow-neon-glow shrink-0">
+                    <Users className="w-6 h-6" />
+                  </div>
+                </div>
+              </div>
+
+              {/* PONTEIRO DINÂMICO DE AVALIAÇÃO (MOSTRADOR TECNOLÓGICO) */}
+              <ApprovalGauge
+                stats={approvalStats}
+                roundStatus={isRoundOpen ? 'aberta' : isRoundClosed ? 'encerrada' : 'aguardando'}
+                compact={false}
+              />
             </div>
           </div>
         </main>
@@ -313,7 +435,15 @@ export const BigScreenPresentationPage: React.FC = () => {
       {/* ============================================================ */}
       {displayMode === 'ranking' && (
         <main className="flex-1 flex flex-col justify-center py-6 z-10 max-w-5xl mx-auto w-full animate-fade-in">
-          {/* Top 3 Colunas de Pódio */}
+          <div className="text-center mb-6 space-y-1">
+            <span className="text-xs font-black uppercase tracking-widest text-arena-gold">
+              Resultado Oficial Consolidado
+            </span>
+            <h2 className="text-3xl sm:text-5xl font-black text-white uppercase">
+              PÓDIO DA COMPETIÇÃO
+            </h2>
+          </div>
+
           <div className="flex items-end justify-center gap-3 sm:gap-6 md:gap-8 w-full">
             {/* 2º Lugar */}
             <div className="flex-1 max-w-[240px] flex flex-col items-center">
@@ -376,8 +506,8 @@ export const BigScreenPresentationPage: React.FC = () => {
       )}
 
       {/* Barra de Controle de Modos para Operador de Palco (Flutuante no Rodapé) */}
-      <footer className="w-full pt-3 border-t border-arena-border/40 z-20 flex flex-col sm:flex-row items-center justify-between gap-3 text-xs">
-        <div className="flex items-center gap-1.5 p-1 bg-black/60 rounded-xl border border-white/10">
+      <footer className="w-full pt-3 border-t border-white/10 z-20 flex flex-col sm:flex-row items-center justify-between gap-3 text-xs">
+        <div className="flex items-center gap-1.5 p-1 bg-black/70 rounded-xl border border-white/10">
           <button
             onClick={() => setSearchParams({ mode: 'auto' })}
             className={`px-3 py-1.5 rounded-lg font-bold transition-all ${
@@ -420,8 +550,8 @@ export const BigScreenPresentationPage: React.FC = () => {
           </button>
         </div>
 
-        <span className="text-gray-500 text-[11px]">
-          Arena Voice 2026 • Telão 16:9 Oficial
+        <span className="text-gray-500 text-[11px] font-mono">
+          Arena Voice 2026 • Telão 16:9 Oficial • Supabase Realtime
         </span>
       </footer>
     </div>

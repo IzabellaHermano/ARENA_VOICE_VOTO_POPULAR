@@ -7,10 +7,9 @@ import {
   RoundTimer,
   VoteCounter,
   AdminActionButton,
-  ApprovalGauge,
 } from '@/components/admin';
-import { calculateApprovalStats, ApprovalStats } from '@/utils/approvalCalculator';
-import { Square, FastForward, BarChart2, RadioTower, Play, Layers, AlertCircle, QrCode, Tv, Sparkles } from 'lucide-react';
+import { parseRoundStartMillis } from '@/utils/approvalCalculator';
+import { Square, FastForward, BarChart2, RadioTower, Play, Layers, AlertCircle, QrCode, Tv, ExternalLink } from 'lucide-react';
 
 export const AdminRoundPage: React.FC = () => {
   const navigate = useNavigate();
@@ -25,7 +24,6 @@ export const AdminRoundPage: React.FC = () => {
   const [votesCount, setVotesCount] = useState(0);
   const [isLoadingAction, setIsLoadingAction] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
-  const [approvalStats, setApprovalStats] = useState<ApprovalStats>(() => calculateApprovalStats([]));
 
   // 1. Escuta o evento em tempo real no Supabase
   useEffect(() => {
@@ -113,37 +111,41 @@ export const AdminRoundPage: React.FC = () => {
   }, [roundId]);
 
   // 5. TEMPO DA RODADA: Calculado a partir do timestamp registrado pelo servidor (startedAt)
-  // Integridade garantida: não reinicia a contagem ao atualizar a página!
+  // Integridade garantida: sincronizado e não reinicia a contagem ao atualizar a página!
   useEffect(() => {
-    if (roundStatus !== 'aberta' || !currentRoundDoc?.startedAt) {
-      if (roundStatus !== 'aberta') {
-        // Zera ou congela tempo quando não estiver aberta
-      }
+    if (!currentRoundDoc?.startedAt) {
+      setSeconds(0);
       return;
     }
 
-    const calculateElapsed = () => {
-      if (!currentRoundDoc.startedAt) return 0;
-      let startMillis = 0;
-      if (typeof currentRoundDoc.startedAt === 'object' && 'toMillis' in currentRoundDoc.startedAt) {
-        startMillis = currentRoundDoc.startedAt.toMillis();
-      } else if (typeof currentRoundDoc.startedAt === 'string') {
-        startMillis = new Date(currentRoundDoc.startedAt).getTime();
-      } else if (typeof currentRoundDoc.startedAt === 'number') {
-        startMillis = currentRoundDoc.startedAt;
-      }
+    const startMillis = parseRoundStartMillis(currentRoundDoc.startedAt);
+    if (!startMillis) {
+      setSeconds(0);
+      return;
+    }
+
+    // Se a rodada estiver encerrada, o tempo fica congelado no encerramento (endedAt)
+    if (roundStatus === 'encerrada') {
+      const endMillis = currentRoundDoc.endedAt ? parseRoundStartMillis(currentRoundDoc.endedAt) : Date.now();
+      const finalDiff = Math.max(0, Math.floor((endMillis - startMillis) / 1000));
+      setSeconds(finalDiff);
+      return;
+    }
+
+    if (roundStatus !== 'aberta') {
+      setSeconds(0);
+      return;
+    }
+
+    const updateTimer = () => {
       const elapsed = Math.max(0, Math.floor((Date.now() - startMillis) / 1000));
-      return elapsed;
+      setSeconds(elapsed);
     };
 
-    setSeconds(calculateElapsed());
-
-    const timer = setInterval(() => {
-      setSeconds(calculateElapsed());
-    }, 1000);
-
-    return () => clearInterval(timer);
-  }, [roundStatus, currentRoundDoc?.startedAt]);
+    updateTimer();
+    const interval = setInterval(updateTimer, 1000);
+    return () => clearInterval(interval);
+  }, [roundStatus, currentRoundDoc?.startedAt, currentRoundDoc?.endedAt]);
 
   // 6. VOTOS RECEBIDOS: Sincronizados em tempo real via tabela results do Supabase
   const activeEvalProjectId = currentRoundDoc?.projectId || activeEvent?.currentProjectId || selectedProjectId;
@@ -163,25 +165,6 @@ export const AdminRoundPage: React.FC = () => {
 
     return () => unsub();
   }, [activeEvalProjectId]);
-
-  // 7. PONTEIRO DINÂMICO DE APROVAÇÃO: Sincronização em tempo real via Supabase
-  useEffect(() => {
-    if (!activeEvalProjectId) {
-      setApprovalStats(calculateApprovalStats([]));
-      return;
-    }
-
-    const unsub = EventService.subscribeToProjectApprovalStats(
-      DEFAULT_EVENT_ID,
-      activeEvalProjectId,
-      currentRoundDoc?.id,
-      (newStats) => {
-        setApprovalStats(newStats);
-      }
-    );
-
-    return () => unsub();
-  }, [activeEvalProjectId, currentRoundDoc?.id]);
 
   // AÇÃO: Encerrar Avaliação (Vermelho)
   const handleCloseRound = async () => {
@@ -377,22 +360,37 @@ export const AdminRoundPage: React.FC = () => {
         </div>
       </div>
 
-      {/* 4. PONTEIRO DINÂMICO DE APROVAÇÃO (MEDIDOR ANALÓGICO MODERNO) */}
-      {normalizedStatus === 'aberta' || normalizedStatus === 'encerrada' ? (
-        <ApprovalGauge
-          stats={approvalStats}
-          projectName={currentProject?.nome || 'Projeto em Votação'}
-          projectCategory={currentProject?.categoria}
-          roundStatus={normalizedStatus}
-        />
-      ) : (
-        <div className="bg-arena-card/60 border border-arena-border/50 rounded-2xl p-4 text-center text-xs text-gray-500 flex items-center justify-center gap-2">
-          <Sparkles className="w-4 h-4 text-gray-500" />
-          <span>
-            O Ponteiro Dinâmico de Aprovação será ativado automaticamente ao liberar a votação deste projeto.
-          </span>
+      {/* 4. EXPERIÊNCIA DO TELÃO INTERATIVO (PONTEIRO DINÂMICO E CRONÔMETRO AO VIVO) */}
+      <div className="bg-arena-card border border-arena-border rounded-2xl p-5 flex flex-col sm:flex-row items-center justify-between gap-4 shadow-xl">
+        <div className="flex items-center gap-4">
+          <div className="w-12 h-12 rounded-2xl bg-arena-red/15 border border-arena-red/30 flex items-center justify-center text-arena-red shadow-neon-glow shrink-0">
+            <Tv className="w-6 h-6" />
+          </div>
+          <div>
+            <h4 className="text-base font-black text-white flex items-center gap-2">
+              <span>Telão Interativo da Rodada</span>
+              {normalizedStatus === 'aberta' && (
+                <span className="px-2.5 py-0.5 rounded-full bg-arena-red/20 text-arena-red text-[10px] font-black uppercase tracking-wider animate-pulse">
+                  Ao Vivo no Palco
+                </span>
+              )}
+            </h4>
+            <p className="text-xs text-gray-400 mt-0.5">
+              O Ponteiro Dinâmico, o Cronômetro Oficial e os Indicadores de Votação são projetados em tempo real na página pública do Telão (16:9).
+            </p>
+          </div>
         </div>
-      )}
+
+        <a
+          href="/telao"
+          target="_blank"
+          rel="noopener noreferrer"
+          className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-gradient-to-r from-arena-red to-[#B3050F] hover:from-[#FF1E27] hover:to-arena-red text-white text-xs font-black uppercase tracking-wider shadow-neon-glow transition-all shrink-0"
+        >
+          <span>Abrir Telão (16:9)</span>
+          <ExternalLink className="w-4 h-4" />
+        </a>
+      </div>
 
       {/* Barra de Ações: Botões de Controle */}
       <div className="bg-arena-card border border-arena-border rounded-2xl p-5 flex flex-wrap items-center justify-between gap-4 shadow-xl">
