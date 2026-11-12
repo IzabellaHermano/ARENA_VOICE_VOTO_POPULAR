@@ -25,22 +25,26 @@ export const VotingProvider: React.FC<VotingProviderProps> = ({ children }) => {
   >('connecting');
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
-  // Função centralizada para inicializar sessão anônima
+  // Função centralizada para inicializar sessão anônima via Supabase
   const initAnonymousSession = useCallback(async () => {
     try {
       const user = await AuthService.ensureAnonymousUser();
       setVoterUid(user.uid);
       setConnectionStatus('connected');
     } catch (err) {
-      console.warn('Conexão ao Firebase Auth offline ou pendente:', err);
-      // Fallback de UID persistente local para desenvolvimento sem emulador
+      console.warn('Erro ao inicializar sessão anônima do Supabase:', err);
+      // Fallback de UID persistente local para desenvolvimento sem servidor
       let fallbackUid = localStorage.getItem('arena_voice_voter_fallback_uid');
       if (!fallbackUid) {
         fallbackUid = `anon_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
         localStorage.setItem('arena_voice_voter_fallback_uid', fallbackUid);
       }
       setVoterUid(fallbackUid);
-      setConnectionStatus('offline');
+      if (typeof navigator !== 'undefined' && !navigator.onLine) {
+        setConnectionStatus('offline');
+      } else {
+        setConnectionStatus('reconnecting');
+      }
     } finally {
       setIsLoading(false);
     }
@@ -72,17 +76,13 @@ export const VotingProvider: React.FC<VotingProviderProps> = ({ children }) => {
     window.addEventListener('online', handleOnline);
     window.addEventListener('offline', handleOffline);
 
-    if (typeof navigator !== 'undefined' && !navigator.onLine) {
-      setConnectionStatus('offline');
-    }
-
     return () => {
       window.removeEventListener('online', handleOnline);
       window.removeEventListener('offline', handleOffline);
     };
   }, [initAnonymousSession]);
 
-  // 2. Escuta o evento principal em tempo real via Firestore
+  // 3. Escuta o evento principal em tempo real via Supabase
   useEffect(() => {
     const unsubscribeEvent = EventService.subscribeToCurrentEvent(
       DEFAULT_EVENT_ID,
@@ -90,9 +90,13 @@ export const VotingProvider: React.FC<VotingProviderProps> = ({ children }) => {
         setEvent(updatedEvent);
         setConnectionStatus('connected');
       },
-      () => {
-        // Fallback local se coleção ainda não criada
-        setConnectionStatus('offline');
+      (err) => {
+        console.warn('Conexão ao evento pendente ou reconectando:', err);
+        if (typeof navigator !== 'undefined' && !navigator.onLine) {
+          setConnectionStatus('offline');
+        } else {
+          setConnectionStatus('reconnecting');
+        }
       }
     );
 
