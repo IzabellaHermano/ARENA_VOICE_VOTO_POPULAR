@@ -2,7 +2,6 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { ArenaLogo, ArenaMascot } from '@/components/branding';
 import { EventService, DEFAULT_EVENT_ID } from '@/services/eventService';
-import { AdminMockService } from '@/services/adminMockService';
 import { ProjectDocument, ResultDocument, EventDocument } from '@/types';
 import { buildRankedResults } from '@/utils/scoring';
 import {
@@ -35,25 +34,10 @@ export const BigScreenRankingPage: React.FC = () => {
     return () => unsub();
   }, []);
 
-  // 2. Escuta os projetos em tempo real
+  // 2. Escuta os projetos em tempo real exclusivamente do Supabase
   useEffect(() => {
     const unsub = EventService.subscribeToProjectsList(DEFAULT_EVENT_ID, (projs) => {
-      if (projs && projs.length > 0) {
-        setProjects(projs);
-      } else {
-        const mockProjs = AdminMockService.getProjects().map((p) => ({
-          id: p.id,
-          eventId: DEFAULT_EVENT_ID,
-          name: p.nome,
-          description: p.descricao || '',
-          bannerUrl: p.bannerUrl || '',
-          order: p.ordem,
-          active: p.ativo,
-          createdAt: { seconds: Date.now() / 1000, nanoseconds: 0 } as any,
-          updatedAt: { seconds: Date.now() / 1000, nanoseconds: 0 } as any,
-        }));
-        setProjects(mockProjs);
-      }
+      setProjects(projs || []);
     });
     return () => unsub();
   }, []);

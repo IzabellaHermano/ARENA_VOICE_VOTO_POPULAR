@@ -4,6 +4,7 @@ import { Layers } from 'lucide-react';
 export interface ProjectBannerProps {
   title: string;
   category?: string;
+  description?: string;
   bannerUrl?: string;
   className?: string;
 }
@@ -11,6 +12,7 @@ export interface ProjectBannerProps {
 export const ProjectBanner: React.FC<ProjectBannerProps> = ({
   title,
   category,
+  description,
   bannerUrl,
   className = '',
 }) => {
@@ -42,13 +44,18 @@ export const ProjectBanner: React.FC<ProjectBannerProps> = ({
       </div>
 
       {/* Project Info */}
-      <div className="p-3 text-center">
+      <div className="p-3 text-center space-y-0.5">
         <h3 className="text-lg sm:text-xl font-black text-white tracking-wide">
           {title}
         </h3>
         {category && (
-          <p className="text-xs text-gray-400 mt-0.5 line-clamp-1">
+          <p className="text-xs font-semibold text-arena-gold line-clamp-1">
             {category}
+          </p>
+        )}
+        {description && (
+          <p className="text-[11px] text-gray-400 line-clamp-2 leading-relaxed">
+            {description}
           </p>
         )}
       </div>

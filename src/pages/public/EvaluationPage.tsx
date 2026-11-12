@@ -59,7 +59,8 @@ export const EvaluationPage: React.FC = () => {
         {/* Banner do Projeto Ativo no Palco */}
         <ProjectBanner
           title={currentProject?.name || 'Projeto em Avaliação'}
-          category={currentProject?.description || 'Plataforma de Inovação e Eficiência'}
+          category={currentProject?.category}
+          description={currentProject?.description}
           bannerUrl={currentProject?.bannerUrl}
         />
 
