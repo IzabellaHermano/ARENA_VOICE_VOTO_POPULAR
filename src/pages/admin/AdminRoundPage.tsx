@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Project, RoundStatus as RoundStatusType, RoundDocument, ResultDocument } from '@/types';
 import { EventService, DEFAULT_EVENT_ID } from '@/services/eventService';
@@ -8,8 +8,24 @@ import {
   VoteCounter,
   AdminActionButton,
 } from '@/components/admin';
-import { parseRoundStartMillis } from '@/utils/approvalCalculator';
-import { Square, FastForward, BarChart2, RadioTower, Play, Layers, AlertCircle, QrCode, Tv, ExternalLink } from 'lucide-react';
+import {
+  parseRoundStartMillis,
+  getConfiguredVotingDuration,
+  formatCountdown,
+} from '@/utils/approvalCalculator';
+import {
+  Square,
+  FastForward,
+  BarChart2,
+  RadioTower,
+  Play,
+  Layers,
+  AlertCircle,
+  Tv,
+  ExternalLink,
+  Trophy,
+  CheckCircle2,
+} from 'lucide-react';
 
 export const AdminRoundPage: React.FC = () => {
   const navigate = useNavigate();
@@ -20,10 +36,14 @@ export const AdminRoundPage: React.FC = () => {
   const [projectsList, setProjectsList] = useState<Project[]>([]);
   const [selectedProjectId, setSelectedProjectId] = useState<string>('');
   const [roundStatus, setRoundStatus] = useState<RoundStatusType>('aguardando');
-  const [seconds, setSeconds] = useState(0);
+  const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const [votesCount, setVotesCount] = useState(0);
   const [isLoadingAction, setIsLoadingAction] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [successMessage, setSuccessMessage] = useState<string | null>(null);
+
+  const configuredDuration = useMemo(() => getConfiguredVotingDuration(), []);
+  const autoClosedRoundIdRef = useRef<string | null>(null);
 
   // 1. Escuta o evento em tempo real no Supabase
   useEffect(() => {
@@ -35,12 +55,13 @@ export const AdminRoundPage: React.FC = () => {
     return () => unsub();
   }, []);
 
-  // 2. Escuta a lista de projetos em tempo real no Supabase
+  // 2. Escuta a lista de projetos em tempo real no Supabase (ordenados por ordem)
   useEffect(() => {
     const unsub = EventService.subscribeToProjectsList(DEFAULT_EVENT_ID, (projs) => {
       if (projs && projs.length > 0) {
-        setProjectsList(
-          projs.map((p) => ({
+        const sorted = [...projs]
+          .sort((a, b) => (a.order ?? 0) - (b.order ?? 0))
+          .map((p) => ({
             id: p.id || '',
             nome: p.name,
             descricao: p.description,
@@ -48,8 +69,8 @@ export const AdminRoundPage: React.FC = () => {
             ordem: p.order,
             ativo: p.active,
             categoria: p.category || '',
-          }))
-        );
+          }));
+        setProjectsList(sorted);
       } else {
         setProjectsList([]);
       }
@@ -57,34 +78,45 @@ export const AdminRoundPage: React.FC = () => {
     return () => unsub();
   }, []);
 
-  // 3. Sincroniza o projeto selecionado a partir do evento ou da rodada
+  // 3. Projetos ativos ordenados rigidamente
+  const activeProjects = useMemo(() => {
+    return projectsList.filter((p) => p.ativo);
+  }, [projectsList]);
+
+  // 4. Sincroniza o projeto selecionado a partir do evento ou da rodada
   useEffect(() => {
     const activeProjId = currentRoundDoc?.projectId || activeEvent?.currentProjectId;
     if (activeProjId) {
       setSelectedProjectId(activeProjId);
-    } else if (projectsList.length > 0 && !selectedProjectId) {
-      setSelectedProjectId(projectsList[0].id);
+    } else if (activeProjects.length > 0 && !selectedProjectId) {
+      setSelectedProjectId(activeProjects[0].id);
     }
-  }, [currentRoundDoc?.projectId, activeEvent?.currentProjectId, projectsList]);
+  }, [currentRoundDoc?.projectId, activeEvent?.currentProjectId, activeProjects, selectedProjectId]);
 
-  // Atualiza o card do currentProject quando selectedProjectId mudar
+  // Atualiza currentProject quando selectedProjectId mudar
   useEffect(() => {
     if (selectedProjectId) {
-      const found = projectsList.find((p) => p.id === selectedProjectId);
+      const found = activeProjects.find((p) => p.id === selectedProjectId) || projectsList.find((p) => p.id === selectedProjectId);
       if (found) {
         setCurrentProject(found);
       }
-    } else if (projectsList.length > 0) {
-      setCurrentProject(projectsList[0]);
+    } else if (activeProjects.length > 0) {
+      setCurrentProject(activeProjects[0]);
     }
-  }, [selectedProjectId, projectsList]);
+  }, [selectedProjectId, activeProjects, projectsList]);
 
-  // 4. Escuta a rodada ativa em tempo real quando houver currentRoundId
+  // 5. Escuta a rodada ativa em tempo real
   const roundId = activeEvent?.currentRoundId;
   useEffect(() => {
     if (!roundId) {
-      setCurrentRoundDoc(null);
-      setRoundStatus('aguardando');
+      // Se não há roundId ativo no evento, mas temos currentRoundDoc anterior
+      if (!activeEvent?.currentRoundId) {
+        if (currentRoundDoc && currentRoundDoc.status === 'open') {
+          setRoundStatus('encerrada');
+        } else if (!currentRoundDoc) {
+          setRoundStatus('aguardando');
+        }
+      }
       return;
     }
 
@@ -108,38 +140,36 @@ export const AdminRoundPage: React.FC = () => {
     });
 
     return () => unsub();
-  }, [roundId]);
+  }, [roundId, activeEvent?.currentRoundId]);
 
-  // 5. TEMPO DA RODADA: Calculado a partir do timestamp registrado pelo servidor (startedAt)
-  // Integridade garantida: sincronizado e não reinicia a contagem ao atualizar a página!
+  // 6. CRONÔMETRO SINCRONIZADO: Baseado no timestamp oficial do servidor (startedAt)
   useEffect(() => {
     if (!currentRoundDoc?.startedAt) {
-      setSeconds(0);
+      setElapsedSeconds(0);
       return;
     }
 
     const startMillis = parseRoundStartMillis(currentRoundDoc.startedAt);
     if (!startMillis) {
-      setSeconds(0);
+      setElapsedSeconds(0);
       return;
     }
 
-    // Se a rodada estiver encerrada, o tempo fica congelado no encerramento (endedAt)
     if (roundStatus === 'encerrada') {
       const endMillis = currentRoundDoc.endedAt ? parseRoundStartMillis(currentRoundDoc.endedAt) : Date.now();
       const finalDiff = Math.max(0, Math.floor((endMillis - startMillis) / 1000));
-      setSeconds(finalDiff);
+      setElapsedSeconds(finalDiff);
       return;
     }
 
     if (roundStatus !== 'aberta') {
-      setSeconds(0);
+      setElapsedSeconds(0);
       return;
     }
 
     const updateTimer = () => {
       const elapsed = Math.max(0, Math.floor((Date.now() - startMillis) / 1000));
-      setSeconds(elapsed);
+      setElapsedSeconds(elapsed);
     };
 
     updateTimer();
@@ -147,7 +177,23 @@ export const AdminRoundPage: React.FC = () => {
     return () => clearInterval(interval);
   }, [roundStatus, currentRoundDoc?.startedAt, currentRoundDoc?.endedAt]);
 
-  // 6. VOTOS RECEBIDOS: Sincronizados em tempo real via tabela results do Supabase
+  // Contagem regressiva
+  const remainingSeconds = useMemo(() => {
+    if (!currentRoundDoc?.startedAt) return configuredDuration;
+    return Math.max(0, configuredDuration - elapsedSeconds);
+  }, [configuredDuration, elapsedSeconds, currentRoundDoc?.startedAt]);
+
+  // AUTO-CLOSE: Quando o tempo restante atingir 00:00, encerra a rodada automaticamente
+  useEffect(() => {
+    if (roundStatus === 'aberta' && remainingSeconds <= 0 && currentRoundDoc?.id) {
+      if (autoClosedRoundIdRef.current !== currentRoundDoc.id) {
+        autoClosedRoundIdRef.current = currentRoundDoc.id;
+        handleCloseRound();
+      }
+    }
+  }, [roundStatus, remainingSeconds, currentRoundDoc?.id]);
+
+  // 7. VOTOS RECEBIDOS: Sincronizados em tempo real via tabela results do Supabase
   const activeEvalProjectId = currentRoundDoc?.projectId || activeEvent?.currentProjectId || selectedProjectId;
   useEffect(() => {
     if (!activeEvalProjectId) {
@@ -166,6 +212,30 @@ export const AdminRoundPage: React.FC = () => {
     return () => unsub();
   }, [activeEvalProjectId]);
 
+  // 8. CÁLCULO DA ORDEM RIGOROSA DOS PROJETOS
+  const currentProjectIndex = useMemo(() => {
+    if (!currentProject?.id) return -1;
+    return activeProjects.findIndex((p) => p.id === currentProject.id);
+  }, [currentProject?.id, activeProjects]);
+
+  const totalActiveProjects = activeProjects.length;
+
+  const nextProject = useMemo(() => {
+    if (currentProjectIndex >= 0 && currentProjectIndex < activeProjects.length - 1) {
+      return activeProjects[currentProjectIndex + 1];
+    }
+    return null;
+  }, [currentProjectIndex, activeProjects]);
+
+  const isLastProject = currentProjectIndex >= 0 && currentProjectIndex === activeProjects.length - 1;
+  const isFirstProject = currentProjectIndex <= 0;
+  const allProjectsPresented = isLastProject && roundStatus === 'encerrada';
+
+  const projectOrderBadge = useMemo(() => {
+    const num = currentProjectIndex >= 0 ? currentProjectIndex + 1 : (currentProject?.ordem || 1);
+    return `PROJETO ${String(num).padStart(2, '0')} DE ${String(totalActiveProjects).padStart(2, '0')}`;
+  }, [currentProjectIndex, totalActiveProjects, currentProject?.ordem]);
+
   // AÇÃO: Encerrar Avaliação (Vermelho)
   const handleCloseRound = async () => {
     setIsLoadingAction(true);
@@ -173,6 +243,8 @@ export const AdminRoundPage: React.FC = () => {
 
     try {
       await EventService.closeRound(DEFAULT_EVENT_ID, currentRoundDoc?.id);
+      setSuccessMessage('Votação encerrada com sucesso!');
+      setTimeout(() => setSuccessMessage(null), 3000);
     } catch (err: any) {
       console.error('Falha ao encerrar rodada no Supabase:', err);
       setErrorMessage(err.message || 'Falha ao encerrar avaliação no servidor.');
@@ -183,9 +255,9 @@ export const AdminRoundPage: React.FC = () => {
 
   // AÇÃO: Liberar Avaliação (Dourado)
   const handleOpenRound = async () => {
-    const targetProjId = selectedProjectId || currentProject?.id || projectsList[0]?.id;
+    const targetProjId = selectedProjectId || currentProject?.id || activeProjects[0]?.id;
     if (!targetProjId) {
-      setErrorMessage('Nenhum projeto selecionado para liberar avaliação.');
+      setErrorMessage('Nenhum projeto ativo disponível para liberar avaliação.');
       return;
     }
 
@@ -194,6 +266,8 @@ export const AdminRoundPage: React.FC = () => {
 
     try {
       await EventService.openRound(DEFAULT_EVENT_ID, targetProjId);
+      setSuccessMessage('Avaliação liberada com sucesso! Telão e celulares atualizados.');
+      setTimeout(() => setSuccessMessage(null), 3000);
     } catch (err: any) {
       console.error('Falha ao abrir rodada no Supabase:', err);
       setErrorMessage(err.message || 'Falha ao liberar avaliação no servidor.');
@@ -202,13 +276,22 @@ export const AdminRoundPage: React.FC = () => {
     }
   };
 
-  // AÇÃO: Próximo Projeto (Azul) — Não abre automaticamente a próxima votação
+  // AÇÃO: Próximo Projeto (Azul) — Respeita estritamente a ordem definida
   const handleNextProject = async () => {
+    if (!nextProject) {
+      setErrorMessage('Não há próximo projeto na fila oficial.');
+      return;
+    }
+
     setIsLoadingAction(true);
     setErrorMessage(null);
 
     try {
-      await EventService.prepareNextRound(DEFAULT_EVENT_ID);
+      await EventService.prepareNextRound(DEFAULT_EVENT_ID, nextProject.id);
+      setSelectedProjectId(nextProject.id);
+      setCurrentProject(nextProject);
+      setSuccessMessage(`Próximo projeto preparado: ${nextProject.nome}. Pronto para liberar.`);
+      setTimeout(() => setSuccessMessage(null), 3000);
     } catch (err: any) {
       console.error('Falha ao preparar próximo projeto no Supabase:', err);
       setErrorMessage(err.message || 'Falha ao preparar próximo projeto no servidor.');
@@ -217,80 +300,95 @@ export const AdminRoundPage: React.FC = () => {
     }
   };
 
-  const normalizedStatus: RoundStatusType = roundStatus;
+  // AÇÃO: Publicar Resultado Oficial no Telão
+  const handlePublishOfficialResults = async () => {
+    setIsLoadingAction(true);
+    setErrorMessage(null);
+
+    try {
+      await EventService.toggleResultsPublished(DEFAULT_EVENT_ID, true);
+      setSuccessMessage('Resultado oficial publicado no Telão! Pódio revelado com sucesso.');
+      setTimeout(() => setSuccessMessage(null), 5000);
+    } catch (err: any) {
+      console.error('Falha ao publicar resultados:', err);
+      setErrorMessage(err.message || 'Falha ao publicar resultados oficiais.');
+    } finally {
+      setIsLoadingAction(false);
+    }
+  };
 
   return (
     <div className="space-y-6 max-w-6xl mx-auto">
-      {/* Header com Indicador de Conexão */}
+      {/* Header com Indicador de Conexão e Atalho para Telão */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-arena-border/60 pb-5">
         <div>
           <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-arena-red/15 text-arena-red border border-arena-red/30 text-xs font-bold uppercase tracking-wider mb-2">
             <RadioTower className="w-3.5 h-3.5 animate-pulse" />
-            <span>Transmissão em Tempo Real</span>
+            <span>Transmissão em Tempo Real • Supabase</span>
           </div>
           <h2 className="text-2xl sm:text-3xl font-black text-white">
-            Controle da Rodada no Servidor
+            Controle da Rodada e Telão Oficial
           </h2>
           <p className="text-xs sm:text-sm text-gray-400 mt-1">
-            Sincronização instantânea com os celulares do público e consolidação de votos atômica no Supabase.
+            Conduza a sequência oficial dos competidores, cronômetro regressivo e apuração em tempo real.
           </p>
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
           <a
-            href="/qrcode"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="px-3 py-2 rounded-xl bg-white/5 hover:bg-white/10 text-gray-200 border border-arena-border text-xs font-bold flex items-center gap-1.5 transition-colors"
-            title="Abrir tela de QR Code para escaneamento"
-          >
-            <QrCode className="w-3.5 h-3.5 text-arena-gold" />
-            <span>QR Code</span>
-          </a>
-
-          <a
             href="/telao"
             target="_blank"
             rel="noopener noreferrer"
-            className="px-3 py-2 rounded-xl bg-gradient-to-r from-arena-red to-red-700 hover:from-red-600 hover:to-red-800 text-white shadow-neon-glow text-xs font-bold flex items-center gap-1.5 transition-all"
-            title="Abrir Telão 16:9 Oficial"
+            className="px-4 py-2 rounded-xl bg-gradient-to-r from-arena-red to-red-700 hover:from-red-600 hover:to-red-800 text-white shadow-neon-glow text-xs font-black uppercase tracking-wider flex items-center gap-2 transition-all"
+            title="Abrir Telão Oficial 16:9 em Nova Aba"
           >
-            <Tv className="w-3.5 h-3.5" />
-            <span>Telão 16:9</span>
+            <Tv className="w-4 h-4" />
+            <span>Telão Oficial 16:9</span>
+            <ExternalLink className="w-3.5 h-3.5 opacity-80" />
           </a>
 
-          <RoundStatus status={normalizedStatus} />
+          <RoundStatus status={roundStatus} />
         </div>
       </div>
 
       {errorMessage && (
-        <div className="p-3 rounded-xl bg-arena-red/15 border border-arena-red/40 text-arena-red text-xs flex items-center gap-2">
+        <div className="p-3.5 rounded-xl bg-arena-red/15 border border-arena-red/40 text-arena-red text-xs flex items-center gap-2 animate-fade-in">
           <AlertCircle className="w-4 h-4 shrink-0" />
           <span>{errorMessage}</span>
         </div>
       )}
 
-      {/* Seletor de Projeto: Permite ao Administrador escolher qual projeto colocar em votação quando não estiver aberta */}
-      {normalizedStatus !== 'aberta' && projectsList.length > 0 && (
-        <div className="bg-arena-card border border-arena-border/80 rounded-2xl p-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shadow-lg">
-          <div className="flex items-center gap-2 text-xs font-bold text-gray-300 uppercase tracking-wider">
-            <Layers className="w-4 h-4 text-arena-gold" />
-            <span>Projeto Selecionado para Rodada:</span>
-          </div>
+      {successMessage && (
+        <div className="p-3.5 rounded-xl bg-arena-green/15 border border-arena-green/40 text-arena-green text-xs flex items-center gap-2 animate-fade-in shadow-green-glow">
+          <CheckCircle2 className="w-4 h-4 shrink-0" />
+          <span>{successMessage}</span>
+        </div>
+      )}
 
+      {/* Ordem de Apresentação e Seletor */}
+      <div className="bg-arena-card border border-arena-border/80 rounded-2xl p-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shadow-lg">
+        <div className="flex items-center gap-2.5 text-xs font-bold text-gray-300 uppercase tracking-wider">
+          <Layers className="w-4 h-4 text-arena-gold" />
+          <span>Sequência Oficial da Competição:</span>
+          <span className="px-2.5 py-0.5 rounded-full bg-arena-gold/15 text-arena-gold border border-arena-gold/30 font-mono font-black text-[11px]">
+            {projectOrderBadge}
+          </span>
+        </div>
+
+        {roundStatus !== 'aberta' && activeProjects.length > 0 && (
           <select
             value={selectedProjectId}
             onChange={(e) => setSelectedProjectId(e.target.value)}
             className="bg-arena-black text-white text-xs sm:text-sm font-semibold rounded-xl px-4 py-2 border border-arena-border focus:border-arena-gold outline-none w-full sm:w-80 transition-colors"
           >
-            {projectsList.map((p) => (
+            {activeProjects.map((p, idx) => (
               <option key={p.id} value={p.id}>
-                #{p.ordem} — {p.nome}
+                #{idx + 1} ({p.ordem}) — {p.nome}
               </option>
             ))}
           </select>
-        </div>
-      )}
+        )}
+      </div>
 
       {/* Grid Principal: Projeto em Avaliação + Métricas */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
@@ -299,15 +397,15 @@ export const AdminRoundPage: React.FC = () => {
           <div>
             <div className="flex items-center justify-between border-b border-arena-border/60 pb-3 mb-4">
               <span className="text-xs font-extrabold uppercase tracking-wider text-gray-400">
-                Projeto em avaliação no momento
+                Projeto na Rodada Atual
               </span>
-              <span className="text-xs font-mono font-bold text-arena-gold">
-                Ordem #{currentProject?.ordem || 1}
+              <span className="text-xs font-mono font-black text-arena-gold uppercase tracking-wider">
+                {projectOrderBadge}
               </span>
             </div>
 
-            {/* Banner do Projeto */}
-            <div className="relative h-44 sm:h-52 rounded-2xl bg-gradient-to-br from-[#0c182d] via-[#101c30] to-[#070e1a] border border-arena-border flex items-center justify-center overflow-hidden mb-4 shadow-inner">
+            {/* Banner do Projeto (16:9) */}
+            <div className="relative aspect-video rounded-2xl bg-gradient-to-br from-[#0c182d] via-[#101c30] to-[#070e1a] border border-arena-border flex items-center justify-center overflow-hidden mb-4 shadow-inner">
               {currentProject?.bannerUrl ? (
                 <img
                   src={currentProject.bannerUrl}
@@ -315,12 +413,12 @@ export const AdminRoundPage: React.FC = () => {
                   className="w-full h-full object-cover"
                 />
               ) : (
-                <div className="flex flex-col items-center justify-center text-gray-400 gap-2">
+                <div className="flex flex-col items-center justify-center text-gray-400 gap-2 p-4 text-center">
                   <div className="w-12 h-12 rounded-2xl bg-white/5 border border-white/10 flex items-center justify-center text-arena-blue shadow-blue-glow">
                     <Layers className="w-6 h-6" />
                   </div>
                   <span className="text-xs font-bold uppercase tracking-widest text-gray-300">
-                    Banner do Projeto
+                    Banner Oficial 16:9
                   </span>
                 </div>
               )}
@@ -343,24 +441,29 @@ export const AdminRoundPage: React.FC = () => {
           </div>
         </div>
 
-        {/* Métricas em Tempo Real: Participação e Cronômetro do Servidor */}
+        {/* Métricas em Tempo Real: Votos e Cronômetro Regressivo */}
         <div className="flex flex-col justify-between gap-5">
           <VoteCounter count={votesCount} />
-          <RoundTimer seconds={seconds} isActive={normalizedStatus === 'aberta'} />
+          <RoundTimer
+            seconds={elapsedSeconds}
+            countdownSeconds={remainingSeconds}
+            isCountdown={true}
+            isActive={roundStatus === 'aberta'}
+          />
 
-          {/* Quick Info Box */}
+          {/* Quick Info Box com Regras */}
           <div className="bg-arena-card/80 border border-arena-border rounded-2xl p-4 text-xs text-gray-400 space-y-2">
             <div className="font-bold text-gray-300 uppercase tracking-wider text-[10px]">
-              Sincronização em Tempo Real (Supabase):
+              Fluxo do Evento e Cronômetro:
             </div>
             <p className="leading-relaxed">
-              O cronômetro utiliza o timestamp do servidor (<span className="text-white font-mono">startedAt</span>), mantendo a integridade mesmo se a aba for atualizada. O contador de votos reflete as transações atômicas instantâneas.
+              Duração configurada: <span className="text-white font-mono font-bold">{formatCountdown(configuredDuration)}</span>. Ao atingir 00:00, a rodada se encerra automaticamente e o telão transita para o estado de encerramento temporário.
             </p>
           </div>
         </div>
       </div>
 
-      {/* 4. EXPERIÊNCIA DO TELÃO INTERATIVO (PONTEIRO DINÂMICO E CRONÔMETRO AO VIVO) */}
+      {/* Card Informativo do Telão Oficial */}
       <div className="bg-arena-card border border-arena-border rounded-2xl p-5 flex flex-col sm:flex-row items-center justify-between gap-4 shadow-xl">
         <div className="flex items-center gap-4">
           <div className="w-12 h-12 rounded-2xl bg-arena-red/15 border border-arena-red/30 flex items-center justify-center text-arena-red shadow-neon-glow shrink-0">
@@ -368,15 +471,20 @@ export const AdminRoundPage: React.FC = () => {
           </div>
           <div>
             <h4 className="text-base font-black text-white flex items-center gap-2">
-              <span>Telão Interativo da Rodada</span>
-              {normalizedStatus === 'aberta' && (
+              <span>Telão Oficial 16:9</span>
+              {roundStatus === 'aberta' && (
                 <span className="px-2.5 py-0.5 rounded-full bg-arena-red/20 text-arena-red text-[10px] font-black uppercase tracking-wider animate-pulse">
                   Ao Vivo no Palco
                 </span>
               )}
+              {activeEvent?.resultsPublished && (
+                <span className="px-2.5 py-0.5 rounded-full bg-arena-gold/20 text-arena-gold text-[10px] font-black uppercase tracking-wider">
+                  Pódio Divulgado
+                </span>
+              )}
             </h4>
             <p className="text-xs text-gray-400 mt-0.5">
-              O Ponteiro Dinâmico, o Cronômetro Oficial e os Indicadores de Votação são projetados em tempo real na página pública do Telão (16:9).
+              O Telão acompanha 100% automaticamente as ações realizadas nesta tela: aguardando início, votação ao vivo, encerramento e pódio final.
             </p>
           </div>
         </div>
@@ -392,23 +500,23 @@ export const AdminRoundPage: React.FC = () => {
         </a>
       </div>
 
-      {/* Barra de Ações: Botões de Controle */}
+      {/* BARRA DE AÇÕES: CONTROLE RIGOROSO DA SEQUÊNCIA E VOTAÇÃO */}
       <div className="bg-arena-card border border-arena-border rounded-2xl p-5 flex flex-wrap items-center justify-between gap-4 shadow-xl">
         <div className="flex flex-wrap items-center gap-3 w-full sm:w-auto">
-          {/* Se a rodada estiver em 'aguardando', exibe botão Dourado para liberar */}
-          {normalizedStatus === 'aguardando' && (
+          {/* 1. Botão Liberar Avaliação / Iniciar Primeira Rodada */}
+          {roundStatus === 'aguardando' && (
             <AdminActionButton
               onClick={handleOpenRound}
               variant="gold"
               isLoading={isLoadingAction}
               icon={<Play className="w-4 h-4 fill-current" />}
             >
-              LIBERAR AVALIAÇÃO
+              {isFirstProject && !currentRoundDoc ? 'INICIAR PRIMEIRA RODADA' : 'LIBERAR AVALIAÇÃO'}
             </AdminActionButton>
           )}
 
-          {/* Botão Vermelho: Encerrar Avaliação */}
-          {normalizedStatus === 'aberta' && (
+          {/* 2. Botão Encerrar Avaliação (Durante a votação ativa) */}
+          {roundStatus === 'aberta' && (
             <AdminActionButton
               onClick={handleCloseRound}
               variant="danger"
@@ -419,11 +527,11 @@ export const AdminRoundPage: React.FC = () => {
             </AdminActionButton>
           )}
 
-          {/* Se estiver encerrada, permite reabrir ou avançar */}
-          {normalizedStatus === 'encerrada' && (
+          {/* 3. Se estiver encerrada, permite reabrir se necessário */}
+          {roundStatus === 'encerrada' && !allProjectsPresented && (
             <AdminActionButton
               onClick={handleOpenRound}
-              variant="primary"
+              variant="secondary"
               isLoading={isLoadingAction}
               icon={<Play className="w-4 h-4 fill-current" />}
             >
@@ -431,18 +539,54 @@ export const AdminRoundPage: React.FC = () => {
             </AdminActionButton>
           )}
 
-          {/* Botão Azul: Próximo Projeto (não abre automaticamente a próxima votação) */}
-          <AdminActionButton
-            onClick={handleNextProject}
-            variant="primary"
-            isLoading={isLoadingAction}
-            icon={<FastForward className="w-4 h-4 fill-current" />}
-          >
-            PRÓXIMO PROJETO
-          </AdminActionButton>
+          {/* 4. BOTÃO PRÓXIMO PROJETO (Regras rígidas) */}
+          {/* Quando a votação estiver ativa: DESABILITADO */}
+          {/* Quando encerrada e houver próximo: HABILITADO com identificação clara */}
+          {/* Quando for o último projeto: DESABILITADO com mensagem 'TODOS OS PROJETOS APRESENTADOS' */}
+          {allProjectsPresented ? (
+            <button
+              disabled
+              className="px-5 py-3 rounded-xl bg-white/5 border border-white/10 text-gray-500 font-bold text-xs uppercase tracking-wider cursor-not-allowed"
+            >
+              TODOS OS PROJETOS APRESENTADOS
+            </button>
+          ) : (
+            <AdminActionButton
+              onClick={handleNextProject}
+              variant="primary"
+              disabled={roundStatus === 'aberta' || !nextProject}
+              isLoading={isLoadingAction}
+              icon={<FastForward className="w-4 h-4 fill-current" />}
+              title={
+                roundStatus === 'aberta'
+                  ? 'Aguarde o encerramento da rodada para avançar'
+                  : nextProject
+                  ? `Avançar para: ${nextProject.nome}`
+                  : 'Nenhum próximo projeto'
+              }
+            >
+              {nextProject
+                ? `PRÓXIMO: ${nextProject.nome.toUpperCase()} (${currentProjectIndex + 2} DE ${totalActiveProjects})`
+                : 'PRÓXIMO PROJETO'}
+            </AdminActionButton>
+          )}
+
+          {/* 5. Se todos os projetos foram apresentados: Botão de Divulgação Oficial */}
+          {allProjectsPresented && (
+            <AdminActionButton
+              onClick={handlePublishOfficialResults}
+              variant="gold"
+              isLoading={isLoadingAction}
+              icon={<Trophy className="w-4 h-4" />}
+            >
+              {activeEvent?.resultsPublished
+                ? 'PÓDIO PUBLICADO NO TELÃO'
+                : 'DIVULGAR RESULTADO OFICIAL NO TELÃO'}
+            </AdminActionButton>
+          )}
         </div>
 
-        {/* Botão Secundário: Gerar Dashboard */}
+        {/* Botão Secundário: Dashboard */}
         <AdminActionButton
           onClick={() => navigate('/admin/resultados')}
           variant="secondary"

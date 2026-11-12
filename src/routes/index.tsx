@@ -11,8 +11,6 @@ import PublicVotingPage from '@/pages/public/PublicVotingPage';
 import WaitingPage from '@/pages/public/WaitingPage';
 import EvaluationPage from '@/pages/public/EvaluationPage';
 import ConfirmationPage from '@/pages/public/ConfirmationPage';
-import BigScreenRankingPage from '@/pages/public/BigScreenRankingPage';
-import BigScreenQRCodePage from '@/pages/public/BigScreenQRCodePage';
 import BigScreenPresentationPage from '@/pages/public/BigScreenPresentationPage';
 
 // Admin Pages
@@ -45,12 +43,12 @@ export const AppRoutes: React.FC = () => {
         <Route path="/confirmacao" element={<ConfirmationPage />} />
       </Route>
 
-      {/* 3. Rotas de Projeção em Telão e QR Code (16:9 Fullscreen sem sidebar) */}
+      {/* 3. Telão Oficial Único (16:9 Fullscreen sem sidebar) — Todas as rotas secundárias redirecionam para /telao */}
       <Route path="/telao" element={<BigScreenPresentationPage />} />
-      <Route path="/qrcode" element={<BigScreenQRCodePage />} />
-      <Route path="/telao/qrcode" element={<BigScreenQRCodePage />} />
-      <Route path="/resultados/telao" element={<BigScreenRankingPage />} />
-      <Route path="/ranking" element={<BigScreenRankingPage />} />
+      <Route path="/qrcode" element={<Navigate to="/telao" replace />} />
+      <Route path="/telao/qrcode" element={<Navigate to="/telao" replace />} />
+      <Route path="/resultados/telao" element={<Navigate to="/telao" replace />} />
+      <Route path="/ranking" element={<Navigate to="/telao" replace />} />
 
       {/* 4. Rotas Administrativas Protegidas com AdminLayout */}
       <Route

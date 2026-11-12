@@ -7,4 +7,5 @@ export * from './RoundTimer';
 export * from './VoteCounter';
 export * from './AdminActionButton';
 export * from './ApprovalGauge';
+export * from './ProjectBannerUpload';
 

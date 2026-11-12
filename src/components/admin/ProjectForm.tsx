@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { Project } from '@/types';
-import { X, Save, Image, AlertCircle } from 'lucide-react';
+import { X, Save, AlertCircle } from 'lucide-react';
 import { AdminActionButton } from './AdminActionButton';
+import { ProjectBannerUpload } from './ProjectBannerUpload';
 
 export interface ProjectFormProps {
   isOpen: boolean;
@@ -172,24 +173,12 @@ export const ProjectForm: React.FC<ProjectFormProps> = ({
             </div>
           </div>
 
-          <div>
-            <label className="block text-xs font-bold uppercase tracking-wider text-gray-300 mb-1">
-              URL do Banner (ou Imagem)
-            </label>
-            <div className="relative">
-              <Image className="w-4 h-4 text-gray-500 absolute left-3 top-1/2 -translate-y-1/2" />
-              <input
-                type="url"
-                value={bannerUrl}
-                onChange={(e) => setBannerUrl(e.target.value)}
-                placeholder="https://exemplo.com/banner.png"
-                className="w-full bg-arena-black border border-arena-border rounded-xl pl-9 pr-3 py-2.5 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-arena-blue transition-colors"
-              />
-            </div>
-            <p className="text-[11px] text-gray-400 mt-1">
-              Deixe em branco para utilizar o padrão escuro temático do Arena Voice.
-            </p>
-          </div>
+          {/* Componente Oficial de Upload de Banners (Supabase Storage / Arquivo do Computador) */}
+          <ProjectBannerUpload
+            currentBannerUrl={bannerUrl}
+            onBannerUploaded={(url) => setBannerUrl(url)}
+            onBannerRemoved={() => setBannerUrl('')}
+          />
 
           <div className="pt-4 border-t border-arena-border/60 flex items-center justify-end gap-3">
             <button

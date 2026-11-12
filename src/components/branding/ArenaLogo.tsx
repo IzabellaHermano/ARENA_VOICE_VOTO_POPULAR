@@ -4,11 +4,11 @@ export type ArenaLogoVariant = 'complete' | 'text' | 'textWithSlogan' | 'transpa
 
 export interface ArenaLogoProps {
   /**
-   * Identifica a variação do logotipo a ser exibida:
-   * - `complete`: Mão metálica, escrita ARENA VOICE e slogan (fundo preto)
-   * - `text`: Apenas ARENA VOICE (fundo preto)
-   * - `textWithSlogan`: Escrita ARENA VOICE com slogan (fundo preto)
-   * - `transparentText`: ARENA VOICE com fundo transparente
+   * Identifica a variação do logotipo oficial do Arena Voice com fundo transparente:
+   * - `complete`: Mão metálica, escrita ARENA VOICE e slogan (Fundo Transparente Oficial)
+   * - `text`: Tipografia ARENA VOICE (Fundo Transparente)
+   * - `textWithSlogan`: Escrita com slogan em fundo transparente
+   * - `transparentText`: ARENA VOICE em fundo transparente
    */
   variant?: ArenaLogoVariant;
   width?: number | string;
@@ -18,9 +18,9 @@ export interface ArenaLogoProps {
 }
 
 const LOGO_SRC_MAP: Record<ArenaLogoVariant, string> = {
-  complete: '/assets/branding/logo-completa.png',
-  text: '/assets/branding/logo-escrita.png',
-  textWithSlogan: '/assets/branding/logo-escrita-slogan.png',
+  complete: '/assets/branding/logo-completa-transparente.png',
+  text: '/assets/branding/logo-escrita-transparente.png',
+  textWithSlogan: '/assets/branding/logo-completa-transparente.png',
   transparentText: '/assets/branding/logo-escrita-transparente.png',
 };
 

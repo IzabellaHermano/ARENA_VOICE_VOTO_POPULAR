@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { EventConfig, AdminUser, Project } from '@/types';
 import { AdminMockService } from '@/services/adminMockService';
+import { EventService, DEFAULT_EVENT_ID } from '@/services/eventService';
 import { AdminActionButton } from '@/components/admin';
 import {
   Sliders,
@@ -12,34 +13,47 @@ import {
   AlertTriangle,
   MoveUp,
   MoveDown,
+  Clock,
+  Layers,
 } from 'lucide-react';
 
 export const AdminSettingsPage: React.FC = () => {
   const [eventConfig, setEventConfig] = useState<EventConfig>(() =>
     AdminMockService.getEventConfig()
   );
-  const [projects, setProjects] = useState<Project[]>(() =>
-    AdminMockService.getProjects()
-  );
+  const [projects, setProjects] = useState<Project[]>([]);
   const [admins] = useState<AdminUser[]>(() =>
     AdminMockService.getAdmins()
   );
   const [saveSuccess, setSaveSuccess] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
+  // 1. Carrega lista real de projetos do Supabase ordenados por ordem
   useEffect(() => {
-    setProjects(AdminMockService.getProjects());
+    const unsub = EventService.subscribeToProjectsList(DEFAULT_EVENT_ID, (projs) => {
+      if (projs && projs.length > 0) {
+        const sorted = [...projs]
+          .sort((a, b) => (a.order ?? 0) - (b.order ?? 0))
+          .map((p) => ({
+            id: p.id || '',
+            nome: p.name,
+            descricao: p.description,
+            bannerUrl: p.bannerUrl,
+            ordem: p.order,
+            ativo: p.active,
+            categoria: p.category || '',
+          }));
+        setProjects(sorted);
+      } else {
+        setProjects(AdminMockService.getProjects());
+      }
+    });
+
+    return () => unsub();
   }, []);
 
-  const handleSaveAll = (e: React.FormEvent) => {
-    e.preventDefault();
-    AdminMockService.saveEventConfig(eventConfig);
-    AdminMockService.saveProjects(projects);
-    AdminMockService.saveAdmins(admins);
-
-    setSaveSuccess(true);
-    setTimeout(() => setSaveSuccess(false), 3000);
-  };
-
+  // 2. Mover projeto para cima ou para baixo na fila oficial
   const handleMoveProject = (index: number, direction: 'up' | 'down') => {
     const targetIndex = direction === 'up' ? index - 1 : index + 1;
     if (targetIndex < 0 || targetIndex >= projects.length) return;
@@ -49,9 +63,39 @@ export const AdminSettingsPage: React.FC = () => {
     copy[index] = copy[targetIndex];
     copy[targetIndex] = temp;
 
-    // Atualiza a propriedade ordem
+    // Atualiza a propriedade ordem sequencialmente (1, 2, 3...)
     const updated = copy.map((p, i) => ({ ...p, ordem: i + 1 }));
     setProjects(updated);
+  };
+
+  // 3. Salvar configurações gerais e persistir ordem no Supabase
+  const handleSaveAll = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setIsSaving(true);
+    setErrorMessage(null);
+
+    try {
+      // 3.1 Persiste a ordem de cada projeto no Supabase
+      const updatePromises = projects.map((p) =>
+        EventService.updateProject(p.id, { order: p.ordem })
+      );
+      await Promise.all(updatePromises);
+
+      // 3.2 Salva configurações locais e no localStorage para acesso do Cronômetro
+      AdminMockService.saveEventConfig(eventConfig);
+      AdminMockService.saveProjects(projects);
+      AdminMockService.saveAdmins(admins);
+
+      localStorage.setItem('arena_voice_admin_event_config', JSON.stringify(eventConfig));
+
+      setSaveSuccess(true);
+      setTimeout(() => setSaveSuccess(false), 4000);
+    } catch (err: any) {
+      console.error('Falha ao salvar configurações:', err);
+      setErrorMessage(err.message || 'Falha ao salvar configurações no Supabase.');
+    } finally {
+      setIsSaving(false);
+    }
   };
 
   return (
@@ -67,21 +111,28 @@ export const AdminSettingsPage: React.FC = () => {
             Configurações Gerais do Arena Voice
           </h2>
           <p className="text-xs sm:text-sm text-gray-400 mt-1">
-            Parâmetros do evento, ordem dos competidores, gestão de administradores e preferências do telão.
+            Parâmetros do evento, ordem oficial dos competidores, cronômetro regressivo e preferências do telão.
           </p>
         </div>
 
         {saveSuccess && (
-          <div className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-arena-green/20 text-arena-green border border-arena-green/40 text-xs font-bold shadow-green-glow">
+          <div className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-arena-green/20 text-arena-green border border-arena-green/40 text-xs font-bold shadow-green-glow animate-fade-in">
             <Check className="w-4 h-4" />
-            <span>Configurações salvas com sucesso!</span>
+            <span>Configurações e ordem salvas no Supabase!</span>
           </div>
         )}
       </div>
 
+      {errorMessage && (
+        <div className="p-3.5 rounded-xl bg-arena-red/15 border border-arena-red/40 text-arena-red text-xs flex items-center gap-2">
+          <AlertTriangle className="w-4 h-4 shrink-0" />
+          <span>{errorMessage}</span>
+        </div>
+      )}
+
       <form onSubmit={handleSaveAll} className="space-y-6">
         {/* 1. Informações Básicas do Evento e Status */}
-        <div className="bg-arena-card border border-arena-border rounded-2xl p-5 sm:p-6 space-y-4">
+        <div className="bg-arena-card border border-arena-border rounded-2xl p-5 sm:p-6 space-y-4 shadow-lg">
           <div className="flex items-center gap-2.5 text-base font-black text-white border-b border-arena-border/60 pb-3">
             <Sliders className="w-5 h-5 text-arena-red" />
             <span>Status e Identificação do Evento</span>
@@ -139,35 +190,42 @@ export const AdminSettingsPage: React.FC = () => {
           </div>
         </div>
 
-        {/* 2. Ordem de Apresentação dos Projetos */}
-        <div className="bg-arena-card border border-arena-border rounded-2xl p-5 sm:p-6 space-y-4">
+        {/* 2. Ordem Oficial de Apresentação dos Projetos (Persistida no Supabase) */}
+        <div className="bg-arena-card border border-arena-border rounded-2xl p-5 sm:p-6 space-y-4 shadow-lg">
           <div className="flex items-center justify-between border-b border-arena-border/60 pb-3">
             <div className="flex items-center gap-2.5 text-base font-black text-white">
-              <MoveUp className="w-5 h-5 text-arena-gold" />
-              <span>Ordem Oficial das Apresentações</span>
+              <Layers className="w-5 h-5 text-arena-gold" />
+              <span>Ordem Oficial das Apresentações no Palco</span>
             </div>
-            <span className="text-xs text-gray-400">
+            <span className="text-xs text-arena-gold font-mono font-bold">
               Total: {projects.length} projetos
             </span>
           </div>
+
+          <p className="text-xs text-gray-400">
+            A ordem definida abaixo será estritamente respeitada pelo botão <span className="text-white font-bold">"PRÓXIMO PROJETO"</span> no controle da rodada. Reorganize utilizando os botões de subir e descer.
+          </p>
 
           <div className="space-y-2">
             {projects.map((proj, idx) => (
               <div
                 key={proj.id}
-                className="flex items-center justify-between p-3 rounded-xl bg-arena-black border border-arena-border"
+                className="flex items-center justify-between p-3 rounded-xl bg-arena-black border border-arena-border hover:border-white/20 transition-all"
               >
                 <div className="flex items-center gap-3">
-                  <span className="w-7 h-7 rounded-lg bg-arena-card border border-arena-border flex items-center justify-center font-mono font-bold text-xs text-arena-gold">
+                  <span className="w-8 h-8 rounded-lg bg-arena-card border border-arena-border flex items-center justify-center font-mono font-black text-xs text-arena-gold shadow-sm">
                     #{idx + 1}
                   </span>
                   <div>
                     <span className="font-bold text-sm text-white">{proj.nome}</span>
                     {proj.categoria && (
-                      <span className="text-xs text-gray-400 ml-2">
+                      <span className="text-xs text-arena-blueLight ml-2">
                         • {proj.categoria}
                       </span>
                     )}
+                    <span className="text-[10px] text-gray-500 font-mono ml-2">
+                      (ID: {proj.id})
+                    </span>
                   </div>
                 </div>
 
@@ -176,8 +234,8 @@ export const AdminSettingsPage: React.FC = () => {
                     type="button"
                     disabled={idx === 0}
                     onClick={() => handleMoveProject(idx, 'up')}
-                    className="p-1.5 rounded-lg bg-arena-card hover:bg-white/10 disabled:opacity-30 disabled:hover:bg-transparent text-gray-300 transition-colors"
-                    title="Mover para cima"
+                    className="p-2 rounded-lg bg-arena-card hover:bg-white/10 disabled:opacity-30 disabled:hover:bg-transparent text-gray-300 hover:text-white transition-colors"
+                    title="Mover para cima na sequência"
                   >
                     <MoveUp className="w-4 h-4" />
                   </button>
@@ -185,8 +243,8 @@ export const AdminSettingsPage: React.FC = () => {
                     type="button"
                     disabled={idx === projects.length - 1}
                     onClick={() => handleMoveProject(idx, 'down')}
-                    className="p-1.5 rounded-lg bg-arena-card hover:bg-white/10 disabled:opacity-30 disabled:hover:bg-transparent text-gray-300 transition-colors"
-                    title="Mover para baixo"
+                    className="p-2 rounded-lg bg-arena-card hover:bg-white/10 disabled:opacity-30 disabled:hover:bg-transparent text-gray-300 hover:text-white transition-colors"
+                    title="Mover para baixo na sequência"
                   >
                     <MoveDown className="w-4 h-4" />
                   </button>
@@ -196,11 +254,11 @@ export const AdminSettingsPage: React.FC = () => {
           </div>
         </div>
 
-        {/* 3. Configurações de Exibição e Telão */}
-        <div className="bg-arena-card border border-arena-border rounded-2xl p-5 sm:p-6 space-y-4">
+        {/* 3. Configurações de Duração e Telão */}
+        <div className="bg-arena-card border border-arena-border rounded-2xl p-5 sm:p-6 space-y-4 shadow-lg">
           <div className="flex items-center gap-2.5 text-base font-black text-white border-b border-arena-border/60 pb-3">
             <Tv className="w-5 h-5 text-arena-blue" />
-            <span>Configurações de Exibição e Telão</span>
+            <span>Configurações do Cronômetro e Telão</span>
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
@@ -228,8 +286,9 @@ export const AdminSettingsPage: React.FC = () => {
             </div>
 
             <div>
-              <label className="block text-xs font-bold uppercase tracking-wider text-gray-300 mb-1.5">
-                Tempo Padrão da Rodada (Segundos)
+              <label className="block text-xs font-bold uppercase tracking-wider text-gray-300 mb-1.5 flex items-center gap-1.5">
+                <Clock className="w-3.5 h-3.5 text-arena-gold" />
+                <span>Tempo Padrão da Rodada (Segundos)</span>
               </label>
               <input
                 type="number"
@@ -244,6 +303,9 @@ export const AdminSettingsPage: React.FC = () => {
                 }
                 className="w-full bg-arena-black border border-arena-border rounded-xl px-3.5 py-2.5 text-sm text-white font-mono focus:outline-none focus:border-arena-blue transition-colors"
               />
+              <span className="text-[10px] text-gray-400 mt-1 block">
+                Ex.: 120 segundos = 2 minutos de contagem regressiva no Telão.
+              </span>
             </div>
 
             <div>
@@ -263,8 +325,8 @@ export const AdminSettingsPage: React.FC = () => {
           </div>
         </div>
 
-        {/* 4. Gerenciamento de Banners de Palco */}
-        <div className="bg-arena-card border border-arena-border rounded-2xl p-5 sm:p-6 space-y-4">
+        {/* 4. Gerenciamento de Banners de Palco e Armazenamento */}
+        <div className="bg-arena-card border border-arena-border rounded-2xl p-5 sm:p-6 space-y-4 shadow-lg">
           <div className="flex items-center gap-2.5 text-base font-black text-white border-b border-arena-border/60 pb-3">
             <Image className="w-5 h-5 text-arena-gold" />
             <span>Gerenciamento de Banners e Mídia</span>
@@ -272,25 +334,25 @@ export const AdminSettingsPage: React.FC = () => {
 
           <div className="text-xs text-gray-300 space-y-2">
             <p>
-              Os banners vinculados aos projetos são servidos pelo Firebase Storage ou por URLs seguras HTTPS.
+              Os banners são enviados diretamente para o <span className="text-white font-semibold">Supabase Storage</span> (bucket <span className="text-arena-gold font-mono">project-banners</span>) através do componente de upload na tela de Projetos.
             </p>
             <div className="p-3 rounded-xl bg-arena-black border border-arena-border flex items-center justify-between text-xs">
               <span className="text-gray-400">Armazenamento oficial:</span>
               <span className="font-mono text-arena-blue font-bold">
-                gs://arena-voice-voto-popular.appspot.com/banners
+                Supabase Storage • bucket: project-banners (público)
               </span>
             </div>
           </div>
         </div>
 
         {/* 5. Gerenciamento de Administradores */}
-        <div className="bg-arena-card border border-arena-border rounded-2xl p-5 sm:p-6 space-y-4">
+        <div className="bg-arena-card border border-arena-border rounded-2xl p-5 sm:p-6 space-y-4 shadow-lg">
           <div className="flex items-center justify-between border-b border-arena-border/60 pb-3">
             <div className="flex items-center gap-2.5 text-base font-black text-white">
               <Users className="w-5 h-5 text-arena-green" />
               <span>Equipe de Administradores Autorizados</span>
             </div>
-            <span className="text-xs text-gray-400">
+            <span className="text-xs text-gray-400 font-mono">
               {admins.length} membros
             </span>
           </div>
@@ -328,11 +390,10 @@ export const AdminSettingsPage: React.FC = () => {
             </table>
           </div>
 
-          {/* Aviso de Segurança de Ações Críticas */}
           <div className="p-3 rounded-xl bg-arena-gold/10 border border-arena-gold/30 text-arena-gold text-xs flex items-center gap-2.5">
             <AlertTriangle className="w-4 h-4 shrink-0" />
             <span>
-              Ações críticas (como exclusão de projetos ou alteração de notas) exigem validação de sessão administrativa no servidor (Firebase Authentication / Cloud Functions).
+              Ações críticas (como exclusão de projetos ou alteração de notas) exigem autenticação administrativa válida via Supabase Auth e RLS no PostgreSQL.
             </span>
           </div>
         </div>
@@ -342,10 +403,11 @@ export const AdminSettingsPage: React.FC = () => {
           <AdminActionButton
             type="submit"
             variant="gold"
+            isLoading={isSaving}
             icon={<Save className="w-4 h-4" />}
             className="w-full sm:w-auto px-8 py-3.5"
           >
-            SALVAR CONFIGURAÇÕES
+            SALVAR CONFIGURAÇÕES NO SUPABASE
           </AdminActionButton>
         </div>
       </form>

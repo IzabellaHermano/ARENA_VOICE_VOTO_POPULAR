@@ -1,5 +1,4 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { useSearchParams } from 'react-router-dom';
 import { ArenaLogo, ArenaMascot } from '@/components/branding';
 import { QRCodeDisplay } from '@/components/qrcode';
 import { ApprovalGauge } from '@/components/admin/ApprovalGauge';
@@ -9,7 +8,8 @@ import {
   ApprovalStats,
   calculateApprovalStats,
   parseRoundStartMillis,
-  formatStopwatch,
+  formatCountdown,
+  getConfiguredVotingDuration,
 } from '@/utils/approvalCalculator';
 import { buildRankedResults } from '@/utils/scoring';
 import {
@@ -18,28 +18,26 @@ import {
   Medal,
   Maximize2,
   Minimize2,
-  RadioTower,
   Sparkles,
   Flame,
   Users,
   Timer,
   Lock,
-  CheckCircle2,
+  ClockAlert,
+  Radio,
 } from 'lucide-react';
 
 export const BigScreenPresentationPage: React.FC = () => {
-  const [searchParams, setSearchParams] = useSearchParams();
-  const currentModeParam = searchParams.get('mode') || 'auto';
-
   const [activeEvent, setActiveEvent] = useState<EventDocument | null>(null);
   const [activeRound, setActiveRound] = useState<RoundDocument | null>(null);
   const [projects, setProjects] = useState<ProjectDocument[]>([]);
   const [resultsList, setResultsList] = useState<ResultDocument[]>([]);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
+  const [configuredDuration, setConfiguredDuration] = useState(() => getConfiguredVotingDuration());
   const [approvalStats, setApprovalStats] = useState<ApprovalStats>(() => calculateApprovalStats([]));
 
-  // 1. Escuta o evento principal em tempo real
+  // 1. Escuta o evento principal em tempo real no Supabase
   useEffect(() => {
     const unsub = EventService.subscribeToCurrentEvent(DEFAULT_EVENT_ID, (ev) => {
       if (ev) setActiveEvent(ev);
@@ -55,7 +53,7 @@ export const BigScreenPresentationPage: React.FC = () => {
     return () => unsub();
   }, []);
 
-  // 3. Monitora o ciclo de vida completo da rodada (Aguardando -> Aberta -> Encerrada -> Nova Rodada)
+  // 3. Monitora o ciclo de vida completo da rodada (Aguardando -> Aberta -> Encerrada)
   useEffect(() => {
     const unsub = EventService.subscribeToLatestRound(DEFAULT_EVENT_ID, (round) => {
       setActiveRound(round);
@@ -73,14 +71,39 @@ export const BigScreenPresentationPage: React.FC = () => {
     return () => unsub();
   }, []);
 
-  // 5. Projeto Ativo na Rodada
+  // 5. Atualiza duração configurada ao montar ou quando mudar configurações
+  useEffect(() => {
+    setConfiguredDuration(getConfiguredVotingDuration());
+  }, []);
+
+  // 6. Lista de projetos ativos ordenados rigidamente por order
+  const activeProjectsSorted = useMemo(() => {
+    return [...projects]
+      .filter((p) => p.active)
+      .sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+  }, [projects]);
+
+  // 7. Projeto Ativo na Rodada
   const activeProject = useMemo(() => {
-    if (!activeRound?.projectId && !activeEvent?.currentProjectId) return null;
     const targetId = activeRound?.projectId || activeEvent?.currentProjectId;
+    if (!targetId) return null;
     return projects.find((p) => p.id === targetId) || null;
   }, [activeRound?.projectId, activeEvent?.currentProjectId, projects]);
 
-  // 6. Ponteiro Dinâmico: Sincronização em tempo real para o projeto ativo
+  const currentProjectIndex = useMemo(() => {
+    if (!activeProject) return -1;
+    return activeProjectsSorted.findIndex((p) => p.id === activeProject.id);
+  }, [activeProject, activeProjectsSorted]);
+
+  const totalProjectsCount = activeProjectsSorted.length || projects.length || 1;
+
+  // Rótulo da ordem oficial do projeto: "PROJETO 01 DE 04"
+  const projectOrderLabel = useMemo(() => {
+    const num = currentProjectIndex >= 0 ? currentProjectIndex + 1 : (activeProject?.order || 1);
+    return `PROJETO ${String(num).padStart(2, '0')} DE ${String(totalProjectsCount).padStart(2, '0')}`;
+  }, [currentProjectIndex, totalProjectsCount, activeProject?.order]);
+
+  // 8. Ponteiro Dinâmico: Sincronização em tempo real para o projeto ativo
   useEffect(() => {
     if (!activeProject?.id) {
       setApprovalStats(calculateApprovalStats([]));
@@ -99,7 +122,8 @@ export const BigScreenPresentationPage: React.FC = () => {
     return () => unsub();
   }, [activeProject?.id, activeRound?.id]);
 
-  // 7. Cronômetro Oficial do Servidor (Baseado em startedAt e endedAt — imune a refresh e reconexões)
+  // 9. Cronômetro Regressivo Oficial do Servidor (Baseado em startedAt e duração)
+  // Imune a refresh da aba e reconexões de rede
   useEffect(() => {
     if (!activeRound?.startedAt) {
       setElapsedSeconds(0);
@@ -112,7 +136,7 @@ export const BigScreenPresentationPage: React.FC = () => {
       return;
     }
 
-    // ESTADO 3 (Fim da Rodada): O cronômetro congela na duração final
+    // Se a rodada estiver encerrada, o tempo congela na duração final
     if (activeRound.status === 'closed') {
       const endMillis = activeRound.endedAt ? parseRoundStartMillis(activeRound.endedAt) : Date.now();
       const finalDiff = Math.max(0, Math.floor((endMillis - startMillis) / 1000));
@@ -120,13 +144,12 @@ export const BigScreenPresentationPage: React.FC = () => {
       return;
     }
 
-    // Se não estiver aberta, mantém zerado
     if (activeRound.status !== 'open') {
       setElapsedSeconds(0);
       return;
     }
 
-    // ESTADO 2 (Rodada Aberta): Atualiza a cada segundo com precisão absoluta
+    // Rodada Aberta: Atualiza a cada segundo
     const updateTimer = () => {
       const now = Date.now();
       const diff = Math.max(0, Math.floor((now - startMillis) / 1000));
@@ -138,34 +161,40 @@ export const BigScreenPresentationPage: React.FC = () => {
     return () => clearInterval(interval);
   }, [activeRound?.status, activeRound?.startedAt, activeRound?.endedAt]);
 
-  // 8. Determina o modo exibido: 'qrcode' | 'round' | 'ranking'
-  const displayMode = useMemo(() => {
-    if (currentModeParam !== 'auto') {
-      return currentModeParam;
-    }
+  // Cálculo do tempo restante em contagem regressiva
+  const remainingSeconds = useMemo(() => {
+    if (!activeRound?.startedAt) return configuredDuration;
+    return Math.max(0, configuredDuration - elapsedSeconds);
+  }, [configuredDuration, elapsedSeconds, activeRound?.startedAt]);
 
-    // Se os resultados finais estiverem publicados, vai para o Pódio Oficial
+  const isUrgentTimer = activeRound?.status === 'open' && remainingSeconds <= 10 && remainingSeconds > 0;
+
+  // 10. ESTADOS DO TELÃO ÚNICO OFICIAL
+  // Estado 1.4: Resultado Oficial (resultsPublished = true)
+  // Estado 1.2: Projeto em Apresentação e Votação (round.status = 'open')
+  // Estado 1.3: Estado Entre Projetos (round.status = 'closed')
+  // Estado 1.1: Aguardando Início (sem rodada ativa / esperando início)
+  const telaoState: '1.1_waiting_start' | '1.2_active_voting' | '1.3_between_projects' | '1.4_final_results' = useMemo(() => {
     if (activeEvent?.resultsPublished) {
-      return 'ranking';
+      return '1.4_final_results';
     }
-
-    // Se houver rodada aberta ou encerrada com projeto, apresenta a experiência de rodada
-    if (activeRound?.status === 'open' || activeRound?.status === 'closed') {
-      return 'round';
+    if (activeRound?.status === 'open' && activeProject) {
+      return '1.2_active_voting';
     }
+    if (activeRound?.status === 'closed' && activeProject) {
+      return '1.3_between_projects';
+    }
+    return '1.1_waiting_start';
+  }, [activeEvent?.resultsPublished, activeRound?.status, activeProject]);
 
-    // Caso padrão: QR code e espera de liberação
-    return 'qrcode';
-  }, [currentModeParam, activeEvent?.resultsPublished, activeRound?.status]);
-
-  // Ranking calculado para o Pódio
+  // Ranking calculado para o Pódio Oficial (Estado 1.4)
   const rankedResults = useMemo(() => {
     const resultsMap = new Map<string, ResultDocument>();
     resultsList.forEach((r) => resultsMap.set(r.projectId, r));
     return buildRankedResults(projects, resultsMap);
   }, [projects, resultsList]);
 
-  // Votos da rodada ativa
+  // Votos confirmados da rodada ativa
   const roundVotesCount = useMemo(() => {
     if (approvalStats.totalVotes > 0) return approvalStats.totalVotes;
     if (!activeProject?.id) return 0;
@@ -181,44 +210,48 @@ export const BigScreenPresentationPage: React.FC = () => {
     }
   };
 
-  const isRoundOpen = activeRound?.status === 'open';
-  const isRoundClosed = activeRound?.status === 'closed';
+  const firstPlace = rankedResults.find((p) => p.rank === 1 && p.hasEvaluations);
+  const secondPlace = rankedResults.find((p) => p.rank === 2 && p.hasEvaluations);
+  const thirdPlace = rankedResults.find((p) => p.rank === 3 && p.hasEvaluations);
+  const otherPlaces = rankedResults.filter(
+    (p) => (p.rank === null || p.rank > 3) && p !== firstPlace && p !== secondPlace && p !== thirdPlace
+  );
 
   return (
     <div className="min-h-screen bg-[#07080D] text-white p-4 sm:p-6 lg:p-8 flex flex-col justify-between relative overflow-hidden select-none">
-      {/* Background Stage Atmosfera Futurista Arena Voice */}
-      <div className="absolute top-0 left-1/4 w-[700px] h-[450px] bg-arena-red/12 blur-[160px] pointer-events-none" />
-      <div className="absolute top-1/3 right-1/4 w-[600px] h-[400px] bg-arena-blue/10 blur-[150px] pointer-events-none" />
+      {/* Background Atmosférico Oficial Arena Voice */}
+      <div className="absolute top-0 left-1/4 w-[750px] h-[450px] bg-arena-red/12 blur-[170px] pointer-events-none" />
+      <div className="absolute top-1/3 right-1/4 w-[650px] h-[400px] bg-arena-blue/10 blur-[160px] pointer-events-none" />
       <div className="absolute -bottom-24 -right-16 opacity-5 pointer-events-none">
         <ArenaMascot variant="transparent" width={560} />
       </div>
 
-      {/* Header do Telão (16:9) */}
+      {/* Header Oficial do Telão 16:9 */}
       <header className="flex flex-col sm:flex-row items-center justify-between gap-4 border-b border-white/10 pb-4 relative z-10">
         <ArenaLogo variant="complete" width={320} />
 
         <div className="flex items-center gap-4">
-          {/* Indicador de Status do Telão */}
-          <div className="inline-flex items-center gap-2 px-3.5 py-1 rounded-full bg-black/70 border border-white/15 text-xs font-black uppercase tracking-wider">
-            {displayMode === 'round' && isRoundOpen ? (
+          {/* Badge Informativa do Telão */}
+          <div className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-black/70 border border-white/15 text-xs font-black uppercase tracking-wider">
+            {telaoState === '1.2_active_voting' ? (
               <>
                 <span className="w-2.5 h-2.5 rounded-full bg-arena-red animate-ping" />
                 <span className="text-arena-red font-mono">Votação ao Vivo no Palco</span>
               </>
-            ) : displayMode === 'round' && isRoundClosed ? (
+            ) : telaoState === '1.3_between_projects' ? (
               <>
                 <Lock className="w-3.5 h-3.5 text-arena-gold" />
-                <span className="text-gray-300">Fim da Rodada</span>
+                <span className="text-gray-300">Aguardando Próximo Projeto</span>
               </>
-            ) : displayMode === 'ranking' ? (
+            ) : telaoState === '1.4_final_results' ? (
               <>
                 <Trophy className="w-3.5 h-3.5 text-arena-gold" />
-                <span className="text-arena-gold">Pódio Oficial</span>
+                <span className="text-arena-gold">Pódio Oficial Homologado</span>
               </>
             ) : (
               <>
-                <RadioTower className="w-3.5 h-3.5 text-gray-400" />
-                <span className="text-gray-400">Aguardando Liberação</span>
+                <Radio className="w-3.5 h-3.5 text-gray-400" />
+                <span className="text-gray-400">Aguardando Início</span>
               </>
             )}
           </div>
@@ -234,30 +267,31 @@ export const BigScreenPresentationPage: React.FC = () => {
       </header>
 
       {/* ============================================================ */}
-      {/* ESTADO 1: AGUARDANDO LIBERAÇÃO DO PRÓXIMO PROJETO            */}
+      {/* ESTADO 1.1 — AGUARDANDO INÍCIO                               */}
+      {/* Quando o evento está aberto mas nenhum projeto está ativo   */}
       {/* ============================================================ */}
-      {displayMode === 'qrcode' && (
+      {telaoState === '1.1_waiting_start' && (
         <main className="flex-1 flex flex-col items-center justify-center py-6 sm:py-10 z-10 text-center space-y-6 animate-fade-in max-w-4xl mx-auto w-full">
           <div className="space-y-3">
             <div className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full bg-arena-gold/15 text-arena-gold border border-arena-gold/30 text-xs font-black uppercase tracking-widest shadow-gold-glow">
               <Sparkles className="w-4 h-4 text-arena-gold" />
-              <span>Arena Voice 2026 • Palco Principal</span>
+              <span>Arena Voice 2026 • Inovação Ferroviária CPTM</span>
             </div>
 
-            <h1 className="text-4xl sm:text-6xl font-black tracking-tight text-white uppercase">
-              VOTO <span className="text-arena-red">POPULAR</span>
+            <h1 className="text-4xl sm:text-6xl lg:text-7xl font-black tracking-tight text-white uppercase">
+              EM INSTANTES, <span className="text-arena-red">A VOZ É SUA</span>
             </h1>
 
-            <div className="inline-block px-4 py-1 rounded-xl bg-white/5 border border-white/10 text-gray-300 text-sm sm:text-base font-bold uppercase tracking-wider">
-              Aguardando Liberação do Próximo Projeto
+            <div className="inline-block px-5 py-2 rounded-2xl bg-white/5 border border-white/10 text-gray-200 text-sm sm:text-lg font-bold uppercase tracking-wider">
+              Aguarde o início das apresentações para avaliar os projetos no palco
             </div>
 
-            <p className="text-sm sm:text-lg text-gray-300 max-w-xl mx-auto font-medium leading-relaxed">
-              Aponte a câmera do seu celular para entrar na arena de votação e aguarde o início da apresentação no palco.
+            <p className="text-sm sm:text-base text-gray-300 max-w-xl mx-auto font-medium leading-relaxed">
+              Aponte a câmera do seu celular para entrar na arena de votação.
             </p>
           </div>
 
-          {/* QR Code com borda elegante */}
+          {/* QR Code centralizado, limpo e de alta legibilidade */}
           <div className="p-4 bg-gradient-to-b from-arena-red/30 via-white/5 to-arena-gold/30 rounded-[40px] shadow-[0_20px_60px_rgba(227,6,19,0.25)] border border-white/20">
             <QRCodeDisplay size={280} showActions={false} />
           </div>
@@ -270,54 +304,23 @@ export const BigScreenPresentationPage: React.FC = () => {
       )}
 
       {/* ============================================================ */}
-      {/* ESTADOS 2 E 3: PROJETO LIBERADO / VOTAÇÃO ATIVA OU FIM RODADA*/}
+      {/* ESTADO 1.2 — PROJETO EM APRESENTAÇÃO E VOTAÇÃO               */}
       {/* ============================================================ */}
-      {displayMode === 'round' && (
+      {telaoState === '1.2_active_voting' && (
         <main className="flex-1 flex flex-col justify-center py-4 sm:py-6 z-10 max-w-7xl mx-auto w-full animate-fade-in">
-          {/* BANNER DE TRANSIÇÃO: ESTADO 3 — FIM DA RODADA DE VOTAÇÃO */}
-          {isRoundClosed && (
-            <div className="mb-4 p-4 sm:p-5 rounded-2xl bg-gradient-to-r from-arena-red/25 via-[#7F1D1D]/30 to-arena-black border-2 border-arena-red/80 shadow-[0_10px_35px_rgba(227,6,19,0.35)] flex flex-col sm:flex-row items-center justify-between gap-3 text-center sm:text-left animate-pulse">
-              <div className="flex items-center gap-3">
-                <div className="w-12 h-12 rounded-xl bg-arena-red text-white flex items-center justify-center shadow-neon-glow shrink-0">
-                  <Lock className="w-6 h-6" />
-                </div>
-                <div>
-                  <h3 className="text-lg sm:text-xl font-black text-white uppercase tracking-wider">
-                    FIM DA RODADA DE VOTAÇÃO
-                  </h3>
-                  <p className="text-xs sm:text-sm text-gray-200 font-medium">
-                    A votação deste projeto foi encerrada. Aguarde a liberação do próximo projeto.
-                  </p>
-                </div>
-              </div>
-
-              <div className="shrink-0 px-4 py-1.5 rounded-full bg-white/10 border border-white/20 text-xs font-bold font-mono text-arena-gold">
-                Resultado Oficial Congelado
-              </div>
-            </div>
-          )}
-
-          {/* Grid Principal 16:9 do Telão */}
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 sm:gap-6 items-stretch">
             {/* LADO ESQUERDO: BANNER OFICIAL E DADOS DO PROJETO (5 colunas) */}
             <div className="lg:col-span-5 flex flex-col justify-between space-y-4">
               <div className="space-y-3">
-                {/* Badge de Status da Rodada */}
+                {/* Badge de Ordem e Status da Rodada */}
                 <div className="flex items-center gap-2">
-                  {isRoundOpen ? (
-                    <div className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-arena-red/20 text-arena-red border border-arena-red/50 text-xs font-black uppercase tracking-wider shadow-neon-glow animate-pulse">
-                      <Flame className="w-4 h-4 text-arena-red" />
-                      <span>Votação Aberta Agora no Palco</span>
-                    </div>
-                  ) : (
-                    <div className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-white/10 text-gray-300 border border-white/20 text-xs font-black uppercase tracking-wider">
-                      <CheckCircle2 className="w-4 h-4 text-arena-gold" />
-                      <span>Projeto Concluído nesta Rodada</span>
-                    </div>
-                  )}
+                  <div className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-arena-red/20 text-arena-red border border-arena-red/50 text-xs font-black uppercase tracking-wider shadow-neon-glow animate-pulse">
+                    <Flame className="w-4 h-4 text-arena-red" />
+                    <span>Votação Aberta Agora no Palco</span>
+                  </div>
 
                   <span className="text-xs uppercase font-extrabold text-arena-gold tracking-widest font-mono">
-                    #{activeProject?.order || 1}
+                    {projectOrderLabel}
                   </span>
                 </div>
 
@@ -341,7 +344,7 @@ export const BigScreenPresentationPage: React.FC = () => {
                 )}
               </div>
 
-              {/* Banner Oficial do Projeto (Proporções 16:9, sem distorção) */}
+              {/* Banner Oficial do Projeto (Proporção 16:9) */}
               <div className="relative aspect-video rounded-2xl overflow-hidden border-2 border-arena-red/50 shadow-[0_15px_40px_rgba(0,0,0,0.8)] bg-gradient-to-br from-[#0F111A] via-[#0A0B10] to-[#161824] flex items-center justify-center">
                 {activeProject?.bannerUrl ? (
                   <img
@@ -367,7 +370,7 @@ export const BigScreenPresentationPage: React.FC = () => {
                 <div>
                   <h4 className="text-xs font-bold text-white flex items-center gap-1.5">
                     <span>Ainda não votou?</span>
-                    {isRoundOpen && <span className="text-arena-red animate-pulse">• Aberto</span>}
+                    <span className="text-arena-red animate-pulse">• Aberto</span>
                   </h4>
                   <p className="text-[11px] text-gray-400 leading-snug mt-0.5">
                     Aponte seu smartphone para o código ao lado e avalie nos 3 critérios oficiais antes do encerramento.
@@ -376,26 +379,50 @@ export const BigScreenPresentationPage: React.FC = () => {
               </div>
             </div>
 
-            {/* LADO DIREITO: CRONÔMETRO, PONTEIRO DINÂMICO E MÉTRICAS (7 colunas) */}
+            {/* LADO DIREITO: CRONÔMETRO REGRESSIVO, PONTEIRO DINÂMICO E MÉTRICAS (7 colunas) */}
             <div className="lg:col-span-7 flex flex-col justify-between space-y-4">
-              {/* Cronômetro Oficial do Servidor e Contador de Votos Sincronizados */}
+              {/* Cronômetro Regressivo e Contador de Votos */}
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
-                {/* Cronômetro Oficial (00:00:00) */}
-                <div className="p-4 rounded-3xl bg-gradient-to-r from-[#12141F] via-[#0F1118] to-[#12141F] border border-white/15 shadow-xl flex items-center justify-between">
+                {/* Cronômetro Regressivo Oficial (MM:SS) com Urgência nos últimos 10s */}
+                <div
+                  className={`p-4 rounded-3xl border transition-all flex items-center justify-between ${
+                    isUrgentTimer
+                      ? 'bg-red-950/60 border-arena-red shadow-[0_0_30px_rgba(227,6,19,0.5)] animate-pulse'
+                      : 'bg-gradient-to-r from-[#12141F] via-[#0F1118] to-[#12141F] border-white/15 shadow-xl'
+                  }`}
+                >
                   <div className="space-y-0.5">
-                    <span className="text-[10px] font-extrabold uppercase text-gray-400 tracking-wider block">
-                      Cronômetro Oficial
+                    <span
+                      className={`text-[10px] font-extrabold uppercase tracking-wider block ${
+                        isUrgentTimer ? 'text-red-300' : 'text-gray-400'
+                      }`}
+                    >
+                      {isUrgentTimer ? 'Atenção: Tempo Esgotando!' : 'Tempo Restante da Rodada'}
                     </span>
-                    <div className="text-3xl sm:text-4xl font-black text-arena-gold font-mono tracking-wider">
-                      {formatStopwatch(elapsedSeconds)}
+                    <div
+                      className={`text-3xl sm:text-4xl font-black font-mono tracking-wider ${
+                        isUrgentTimer ? 'text-red-400' : 'text-arena-gold'
+                      }`}
+                    >
+                      {formatCountdown(remainingSeconds)}
                     </div>
                     <span className="text-[9px] text-gray-500 font-medium">
-                      {isRoundOpen ? 'Contagem ativa • startedAt' : 'Tempo final gravado'}
+                      {remainingSeconds > 0 ? 'Contagem regressiva sincronizada' : 'Votação encerrando...'}
                     </span>
                   </div>
 
-                  <div className="w-12 h-12 rounded-2xl bg-arena-gold/15 border border-arena-gold/30 flex items-center justify-center text-arena-gold shadow-gold-glow shrink-0">
-                    <Timer className={`w-6 h-6 ${isRoundOpen ? 'animate-pulse' : ''}`} />
+                  <div
+                    className={`w-12 h-12 rounded-2xl flex items-center justify-center shrink-0 ${
+                      isUrgentTimer
+                        ? 'bg-red-600/30 border border-red-500 text-red-300 animate-bounce'
+                        : 'bg-arena-gold/15 border border-arena-gold/30 text-arena-gold shadow-gold-glow'
+                    }`}
+                  >
+                    {isUrgentTimer ? (
+                      <ClockAlert className="w-6 h-6" />
+                    ) : (
+                      <Timer className="w-6 h-6 animate-pulse" />
+                    )}
                   </div>
                 </div>
 
@@ -419,10 +446,10 @@ export const BigScreenPresentationPage: React.FC = () => {
                 </div>
               </div>
 
-              {/* PONTEIRO DINÂMICO DE AVALIAÇÃO (MOSTRADOR TECNOLÓGICO) */}
+              {/* NOVO INDICADOR HORIZONTAL TECNOLÓGICO DE APROVAÇÃO */}
               <ApprovalGauge
                 stats={approvalStats}
-                roundStatus={isRoundOpen ? 'aberta' : isRoundClosed ? 'encerrada' : 'aguardando'}
+                roundStatus="aberta"
                 compact={false}
               />
             </div>
@@ -431,127 +458,273 @@ export const BigScreenPresentationPage: React.FC = () => {
       )}
 
       {/* ============================================================ */}
-      {/* MODO 3: PÓDIO E RANKING OFICIAL HOMOLOGADO                    */}
+      {/* ESTADO 1.3 — ESTADO ENTRE PROJETOS                           */}
+      {/* Votação encerrada, exibe resultado congelado e aguarda       */}
       {/* ============================================================ */}
-      {displayMode === 'ranking' && (
-        <main className="flex-1 flex flex-col justify-center py-6 z-10 max-w-5xl mx-auto w-full animate-fade-in">
-          <div className="text-center mb-6 space-y-1">
-            <span className="text-xs font-black uppercase tracking-widest text-arena-gold">
-              Resultado Oficial Consolidado
-            </span>
-            <h2 className="text-3xl sm:text-5xl font-black text-white uppercase">
-              PÓDIO DA COMPETIÇÃO
-            </h2>
+      {telaoState === '1.3_between_projects' && (
+        <main className="flex-1 flex flex-col justify-center py-4 sm:py-6 z-10 max-w-7xl mx-auto w-full animate-fade-in space-y-4">
+          {/* Mensagem em Destaque: VOTAÇÃO ENCERRADA */}
+          <div className="p-5 sm:p-6 rounded-3xl bg-gradient-to-r from-arena-red/30 via-[#7F1D1D]/40 to-arena-black border-2 border-arena-red shadow-[0_10px_40px_rgba(227,6,19,0.4)] flex flex-col sm:flex-row items-center justify-between gap-4 text-center sm:text-left">
+            <div className="flex items-center gap-4">
+              <div className="w-14 h-14 rounded-2xl bg-arena-red text-white flex items-center justify-center shadow-neon-glow shrink-0">
+                <Lock className="w-7 h-7" />
+              </div>
+              <div>
+                <h3 className="text-xl sm:text-2xl font-black text-white uppercase tracking-wider">
+                  VOTAÇÃO ENCERRADA — OBRIGADO PELA PARTICIPAÇÃO!
+                </h3>
+                <p className="text-xs sm:text-sm text-gray-200 font-medium mt-0.5">
+                  Aguarde a apresentação do próximo projeto no palco.
+                </p>
+              </div>
+            </div>
+
+            <div className="shrink-0 px-5 py-2 rounded-full bg-white/10 border border-white/20 text-xs font-bold font-mono text-arena-gold">
+              Resultado Parcial Congelado
+            </div>
           </div>
 
-          <div className="flex items-end justify-center gap-3 sm:gap-6 md:gap-8 w-full">
-            {/* 2º Lugar */}
-            <div className="flex-1 max-w-[240px] flex flex-col items-center">
-              {rankedResults[1] ? (
-                <div className="text-center mb-2 w-full">
-                  <div className="w-11 h-11 rounded-full bg-slate-300 text-black font-black flex items-center justify-center text-sm shadow-md mx-auto mb-2 border-2 border-white">
-                    2º
-                  </div>
-                  <h3 className="font-extrabold text-sm text-gray-100 line-clamp-1">{rankedResults[1].name}</h3>
-                  <div className="text-2xl font-black text-white font-mono">{rankedResults[1].formattedGeneral}</div>
-                  <div className="text-xs font-bold text-slate-300 bg-white/5 px-2 py-0.5 rounded mt-0.5 inline-block">
-                    {rankedResults[1].formattedPoints} pts
-                  </div>
+          {/* Grid do Projeto Recém-Avaliado e Consolidação Congelada */}
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 sm:gap-6 items-stretch">
+            {/* LADO ESQUERDO: Informações do Projeto Avaliado */}
+            <div className="lg:col-span-5 flex flex-col justify-between space-y-4">
+              <div className="space-y-2">
+                <div className="flex items-center gap-2">
+                  <span className="px-3 py-1 rounded-full bg-white/10 text-gray-300 border border-white/20 text-xs font-black uppercase tracking-wider">
+                    Projeto Concluído nesta Rodada
+                  </span>
+                  <span className="text-xs uppercase font-extrabold text-arena-gold tracking-widest font-mono">
+                    {projectOrderLabel}
+                  </span>
                 </div>
-              ) : null}
-              <div className="w-full h-44 sm:h-52 bg-gradient-to-t from-slate-700 via-slate-500 to-slate-400 rounded-t-2xl border-t-4 border-slate-300 shadow-xl flex items-center justify-center">
-                <Award className="w-10 h-10 text-slate-200 opacity-60" />
+
+                <h2 className="text-2xl sm:text-3xl font-black text-white">
+                  {activeProject?.name || 'Projeto Avaliado'}
+                </h2>
+                {activeProject?.category && (
+                  <span className="text-xs font-bold text-arena-blueLight">
+                    {activeProject.category}
+                  </span>
+                )}
+              </div>
+
+              {/* Banner do Projeto */}
+              <div className="relative aspect-video rounded-2xl overflow-hidden border border-white/20 shadow-xl bg-gradient-to-br from-[#0F111A] to-[#161824] flex items-center justify-center">
+                {activeProject?.bannerUrl ? (
+                  <img
+                    src={activeProject.bannerUrl}
+                    alt={activeProject.name}
+                    className="w-full h-full object-cover"
+                  />
+                ) : (
+                  <ArenaLogo variant="textWithSlogan" width={240} />
+                )}
+              </div>
+
+              {/* Mini QR Code para quem quiser se conectar antes do próximo projeto */}
+              <div className="p-3 rounded-2xl bg-white/[0.03] border border-white/10 flex items-center gap-3">
+                <div className="p-1.5 bg-white rounded-xl shrink-0">
+                  <QRCodeDisplay size={64} showActions={false} />
+                </div>
+                <div className="text-[11px] text-gray-400">
+                  <span className="font-bold text-white block">Aguarde o próximo projeto</span>
+                  Escaneie agora para ficar pronto para a próxima votação.
+                </div>
               </div>
             </div>
 
-            {/* 1º Lugar */}
-            <div className="flex-1 max-w-[280px] flex flex-col items-center -mt-6">
-              {rankedResults[0] ? (
-                <div className="text-center mb-2 w-full">
-                  <div className="w-16 h-16 rounded-full bg-gradient-to-b from-yellow-300 via-arena-gold to-yellow-600 text-black font-black flex items-center justify-center text-xl shadow-gold-glow mx-auto mb-2 border-2 border-yellow-200 animate-bounce">
-                    <Trophy className="w-8 h-8" />
+            {/* LADO DIREITO: Total de Votos Computados e Indicador Estabilizado */}
+            <div className="lg:col-span-7 flex flex-col justify-between space-y-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
+                <div className="p-4 rounded-3xl bg-[#12141F] border border-white/15 flex items-center justify-between">
+                  <div className="space-y-0.5">
+                    <span className="text-[10px] font-extrabold uppercase text-gray-400 tracking-wider block">
+                      Status da Avaliação
+                    </span>
+                    <div className="text-2xl font-black text-arena-gold uppercase">
+                      Finalizada
+                    </div>
+                    <span className="text-[9px] text-gray-500 font-medium">
+                      Votos congelados no banco
+                    </span>
                   </div>
-                  <h3 className="font-black text-base sm:text-lg text-arena-goldLight line-clamp-1">{rankedResults[0].name}</h3>
-                  <div className="text-4xl sm:text-5xl font-black text-arena-gold font-mono">{rankedResults[0].formattedGeneral}</div>
-                  <div className="text-xs sm:text-sm font-black text-black bg-arena-gold px-3 py-1 rounded-full mt-1 shadow-gold-glow inline-block">
-                    {rankedResults[0].formattedPoints} pontos
+                  <div className="w-12 h-12 rounded-2xl bg-arena-gold/15 border border-arena-gold/30 flex items-center justify-center text-arena-gold shrink-0">
+                    <Lock className="w-6 h-6" />
                   </div>
                 </div>
-              ) : null}
-              <div className="w-full h-60 sm:h-68 bg-gradient-to-t from-amber-800 via-yellow-600 to-yellow-400 rounded-t-2xl border-t-4 border-yellow-200 shadow-gold-glow flex items-center justify-center">
-                <Trophy className="w-14 h-14 text-yellow-100 opacity-80" />
-              </div>
-            </div>
 
-            {/* 3º Lugar */}
-            <div className="flex-1 max-w-[240px] flex flex-col items-center">
-              {rankedResults[2] ? (
-                <div className="text-center mb-2 w-full">
-                  <div className="w-11 h-11 rounded-full bg-amber-700 text-white font-black flex items-center justify-center text-sm shadow-md mx-auto mb-2 border-2 border-amber-500">
-                    3º
+                <div className="p-4 rounded-3xl bg-[#12141F] border border-white/15 flex items-center justify-between">
+                  <div className="space-y-0.5">
+                    <span className="text-[10px] font-extrabold uppercase text-gray-400 tracking-wider block">
+                      Total de Votos Computados
+                    </span>
+                    <div className="text-3xl sm:text-4xl font-black text-white font-mono">
+                      {roundVotesCount}
+                    </div>
+                    <span className="text-[9px] text-gray-500 font-medium">
+                      Consolidação atômica
+                    </span>
                   </div>
-                  <h3 className="font-extrabold text-sm text-gray-100 line-clamp-1">{rankedResults[2].name}</h3>
-                  <div className="text-2xl font-black text-white font-mono">{rankedResults[2].formattedGeneral}</div>
-                  <div className="text-xs font-bold text-amber-300 bg-white/5 px-2 py-0.5 rounded mt-0.5 inline-block">
-                    {rankedResults[2].formattedPoints} pts
+                  <div className="w-12 h-12 rounded-2xl bg-arena-red/15 border border-arena-red/30 flex items-center justify-center text-arena-red shrink-0">
+                    <Users className="w-6 h-6" />
                   </div>
                 </div>
-              ) : null}
-              <div className="w-full h-36 sm:h-40 bg-gradient-to-t from-amber-950 via-amber-800 to-amber-700 rounded-t-2xl border-t-4 border-amber-500 shadow-xl flex items-center justify-center">
-                <Medal className="w-10 h-10 text-amber-200 opacity-60" />
               </div>
+
+              {/* Indicador de Aprovação com Marcador Estabilizado */}
+              <ApprovalGauge
+                stats={approvalStats}
+                roundStatus="encerrada"
+                compact={false}
+              />
             </div>
           </div>
         </main>
       )}
 
-      {/* Barra de Controle de Modos para Operador de Palco (Flutuante no Rodapé) */}
-      <footer className="w-full pt-3 border-t border-white/10 z-20 flex flex-col sm:flex-row items-center justify-between gap-3 text-xs">
-        <div className="flex items-center gap-1.5 p-1 bg-black/70 rounded-xl border border-white/10">
-          <button
-            onClick={() => setSearchParams({ mode: 'auto' })}
-            className={`px-3 py-1.5 rounded-lg font-bold transition-all ${
-              currentModeParam === 'auto'
-                ? 'bg-arena-red text-white shadow-neon-glow'
-                : 'text-gray-400 hover:text-white'
-            }`}
-          >
-            Modo Automático
-          </button>
-          <button
-            onClick={() => setSearchParams({ mode: 'qrcode' })}
-            className={`px-3 py-1.5 rounded-lg font-bold transition-all ${
-              currentModeParam === 'qrcode'
-                ? 'bg-arena-red text-white shadow-neon-glow'
-                : 'text-gray-400 hover:text-white'
-            }`}
-          >
-            QR Code
-          </button>
-          <button
-            onClick={() => setSearchParams({ mode: 'round' })}
-            className={`px-3 py-1.5 rounded-lg font-bold transition-all ${
-              currentModeParam === 'round'
-                ? 'bg-arena-red text-white shadow-neon-glow'
-                : 'text-gray-400 hover:text-white'
-            }`}
-          >
-            Rodada ao Vivo
-          </button>
-          <button
-            onClick={() => setSearchParams({ mode: 'ranking' })}
-            className={`px-3 py-1.5 rounded-lg font-bold transition-all ${
-              currentModeParam === 'ranking'
-                ? 'bg-arena-red text-white shadow-neon-glow'
-                : 'text-gray-400 hover:text-white'
-            }`}
-          >
-            Pódio Oficial
-          </button>
-        </div>
+      {/* ============================================================ */}
+      {/* ESTADO 1.4 — ESTADO FINAL: RESULTADO OFICIAL E PÓDIO          */}
+      {/* Ativado quando o administrador publica os resultados         */}
+      {/* ============================================================ */}
+      {telaoState === '1.4_final_results' && (
+        <main className="flex-1 flex flex-col justify-center py-4 sm:py-6 z-10 max-w-6xl mx-auto w-full animate-fade-in space-y-6">
+          <div className="text-center space-y-2">
+            <div className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full bg-arena-gold/15 text-arena-gold border border-arena-gold/30 text-xs font-black uppercase tracking-widest shadow-gold-glow">
+              <Sparkles className="w-4 h-4 text-arena-gold" />
+              <span>Consolidação Oficial • 20% Voto Popular + 80% Banca Técnica</span>
+            </div>
+            <h1 className="text-3xl sm:text-5xl lg:text-6xl font-black text-white uppercase tracking-tight">
+              RESULTADO OFICIAL — <span className="text-arena-gold">ARENA VOICE</span>
+            </h1>
+          </div>
 
-        <span className="text-gray-500 text-[11px] font-mono">
-          Arena Voice 2026 • Telão 16:9 Oficial • Supabase Realtime
+          {/* PÓDIO OFICIAL (Top 3) */}
+          <div className="flex items-end justify-center gap-3 sm:gap-6 md:gap-8 w-full px-2 pt-4">
+            {/* 2º Lugar (Prata) */}
+            <div className="flex-1 max-w-[260px] flex flex-col items-center">
+              {secondPlace ? (
+                <div className="text-center mb-3 w-full animate-fade-in">
+                  <div className="w-12 h-12 rounded-full bg-slate-300 text-black font-black flex items-center justify-center text-sm shadow-md mx-auto mb-2 border-2 border-white">
+                    2º
+                  </div>
+                  {secondPlace.bannerUrl && (
+                    <div className="w-16 h-16 rounded-xl overflow-hidden mx-auto mb-2 border border-slate-400/40 shadow-md">
+                      <img src={secondPlace.bannerUrl} alt={secondPlace.name} className="w-full h-full object-cover" />
+                    </div>
+                  )}
+                  <h3 className="font-extrabold text-sm sm:text-base text-gray-100 line-clamp-1">{secondPlace.name}</h3>
+                  <div className="text-2xl sm:text-3xl font-black text-white font-mono mt-0.5">{secondPlace.formattedGeneral}</div>
+                  <div className="text-[10px] text-gray-400 uppercase font-semibold">Média Geral</div>
+                  <div className="text-xs font-bold text-slate-300 bg-white/5 px-2.5 py-1 rounded-md mt-1 inline-block">
+                    {secondPlace.formattedPoints} pts
+                  </div>
+                </div>
+              ) : (
+                <div className="text-center mb-3 text-gray-500 text-xs">Sem 2º Lugar</div>
+              )}
+              <div className="w-full h-44 sm:h-52 bg-gradient-to-t from-slate-700 via-slate-500 to-slate-400 rounded-t-2xl border-t-4 border-slate-300 shadow-xl flex flex-col items-center justify-center p-2">
+                <Award className="w-10 h-10 text-slate-200 opacity-60" />
+                <span className="text-xs font-black uppercase tracking-wider text-black/70 mt-1">2º Lugar</span>
+              </div>
+            </div>
+
+            {/* 1º Lugar (Ouro) */}
+            <div className="flex-1 max-w-[300px] flex flex-col items-center -mt-6">
+              {firstPlace ? (
+                <div className="text-center mb-3 w-full animate-fade-in">
+                  <div className="w-16 h-16 rounded-full bg-gradient-to-b from-yellow-300 via-arena-gold to-yellow-600 text-black font-black flex items-center justify-center text-xl shadow-gold-glow mx-auto mb-2 border-2 border-yellow-200 animate-bounce">
+                    <Trophy className="w-8 h-8" />
+                  </div>
+                  {firstPlace.bannerUrl && (
+                    <div className="w-20 h-20 rounded-2xl overflow-hidden mx-auto mb-2 border-2 border-arena-gold shadow-gold-glow">
+                      <img src={firstPlace.bannerUrl} alt={firstPlace.name} className="w-full h-full object-cover" />
+                    </div>
+                  )}
+                  <h3 className="font-black text-base sm:text-xl text-arena-goldLight line-clamp-1">{firstPlace.name}</h3>
+                  <div className="text-4xl sm:text-5xl font-black text-arena-gold font-mono mt-0.5">{firstPlace.formattedGeneral}</div>
+                  <div className="text-xs text-yellow-200 uppercase font-bold tracking-wider">Média Geral</div>
+                  <div className="text-xs sm:text-sm font-black text-black bg-arena-gold px-3.5 py-1.5 rounded-full mt-1.5 shadow-gold-glow inline-block">
+                    {firstPlace.formattedPoints} pontos
+                  </div>
+                </div>
+              ) : (
+                <div className="text-center mb-3 text-gray-500 text-xs">Sem 1º Lugar</div>
+              )}
+              <div className="w-full h-60 sm:h-68 bg-gradient-to-t from-amber-800 via-yellow-600 to-yellow-400 rounded-t-2xl border-t-4 border-yellow-200 shadow-gold-glow flex flex-col items-center justify-center p-2">
+                <Trophy className="w-14 h-14 text-yellow-100 opacity-80" />
+                <span className="text-sm font-black uppercase tracking-widest text-black/80 mt-1">Campeão</span>
+              </div>
+            </div>
+
+            {/* 3º Lugar (Bronze) */}
+            <div className="flex-1 max-w-[260px] flex flex-col items-center">
+              {thirdPlace ? (
+                <div className="text-center mb-3 w-full animate-fade-in">
+                  <div className="w-12 h-12 rounded-full bg-amber-700 text-white font-black flex items-center justify-center text-sm shadow-md mx-auto mb-2 border-2 border-amber-500">
+                    3º
+                  </div>
+                  {thirdPlace.bannerUrl && (
+                    <div className="w-16 h-16 rounded-xl overflow-hidden mx-auto mb-2 border border-amber-600/40 shadow-md">
+                      <img src={thirdPlace.bannerUrl} alt={thirdPlace.name} className="w-full h-full object-cover" />
+                    </div>
+                  )}
+                  <h3 className="font-extrabold text-sm sm:text-base text-gray-100 line-clamp-1">{thirdPlace.name}</h3>
+                  <div className="text-2xl sm:text-3xl font-black text-white font-mono mt-0.5">{thirdPlace.formattedGeneral}</div>
+                  <div className="text-[10px] text-gray-400 uppercase font-semibold">Média Geral</div>
+                  <div className="text-xs font-bold text-amber-300 bg-white/5 px-2.5 py-1 rounded-md mt-1 inline-block">
+                    {thirdPlace.formattedPoints} pts
+                  </div>
+                </div>
+              ) : (
+                <div className="text-center mb-3 text-gray-500 text-xs">Sem 3º Lugar</div>
+              )}
+              <div className="w-full h-36 sm:h-44 bg-gradient-to-t from-amber-950 via-amber-800 to-amber-700 rounded-t-2xl border-t-4 border-amber-500 shadow-xl flex flex-col items-center justify-center p-2">
+                <Medal className="w-10 h-10 text-amber-200 opacity-60" />
+                <span className="text-xs font-black uppercase tracking-wider text-black/70 mt-1">3º Lugar</span>
+              </div>
+            </div>
+          </div>
+
+          {/* Ranking Completo dos Demais Participantes */}
+          {otherPlaces.length > 0 && (
+            <div className="max-w-4xl mx-auto w-full mt-6 px-4">
+              <h4 className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-2 text-center">
+                Classificação dos Demais Projetos
+              </h4>
+              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
+                {otherPlaces.map((p) => (
+                  <div
+                    key={p.projectId}
+                    className="flex items-center justify-between p-3 rounded-xl bg-[#0F111A] border border-white/10 text-xs shadow-md"
+                  >
+                    <div className="flex items-center gap-2.5">
+                      <span className="w-6 h-6 rounded-full bg-white/10 flex items-center justify-center font-bold text-gray-300 text-[11px]">
+                        {p.rank !== null ? `${p.rank}º` : '-'}
+                      </span>
+                      <div>
+                        <h5 className="font-bold text-white line-clamp-1">{p.name}</h5>
+                        <span className="text-[10px] text-gray-400">{p.totalVotes} votos</span>
+                      </div>
+                    </div>
+                    <div className="text-right">
+                      <span className="font-mono font-bold text-white text-sm block">{p.formattedGeneral}</span>
+                      <span className="text-[10px] font-semibold text-arena-gold">{p.formattedPoints} pts</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </main>
+      )}
+
+      {/* Footer Minimalista e Elegante — Sem botões manuais de modo */}
+      <footer className="w-full pt-3 border-t border-white/10 z-20 flex flex-col sm:flex-row items-center justify-between gap-2 text-xs">
+        <span className="text-gray-400 font-medium text-[11px]">
+          Arena Voice 2026 • Telão 16:9 Oficial • Transmissão em Tempo Real Supabase
+        </span>
+        <span className="text-gray-500 font-mono text-[10px]">
+          Status do Sistema: Sincronizado
         </span>
       </footer>
     </div>

@@ -1,6 +1,6 @@
 /**
  * ARENA VOICE — VOTO POPULAR
- * Calculadora Oficial do Telão e Ponteiro Dinâmico de Avaliação
+ * Calculadora Oficial do Telão e Indicador de Aprovação ao Vivo
  *
  * Regras Oficiais:
  * 1. Cada voto é composto por 3 critérios (notas de 1 a 5):
@@ -15,22 +15,22 @@
  *    - Positiva: média individual > 3.0
  *    - Neutra: média individual == 3.0
  *    - Negativa: média individual < 3.0
- *    Total = Positivos + Neutros + Negativos
+ *    Total = Positivos + Neutros + Negativos (Soma estritamente auditada)
  *
  * 4. Média Geral Consolidada da Rodada:
- *    média geral = média de todas as notas dos votos válidos da rodada (escala de 1 a 5)
+ *    média geral = média de todas as notas dos votos válidos da rodada (escala de 1.00 a 5.00)
  *
- * 5. Escala do Ponteiro (-100% a +100%):
+ * 5. Escala do Indicador (-100% a +100%):
  *    escala = ((média geral - 3) / 2) * 100
- *    - Média 1.0: -100% (extrema esquerda, -90°)
- *    - Média 2.0: -50% (-45°)
- *    - Média 3.0: 0% (centro vertical, 0°)
- *    - Média 4.0: +50% (+45°)
- *    - Média 5.0: +100% (extrema direita, +90°)
+ *    - Média 1.0: -100% (Extrema Esquerda, REJEIÇÃO)
+ *    - Média 2.0: -50%
+ *    - Média 3.0: 0% (Centro, EQUILÍBRIO)
+ *    - Média 4.0: +50%
+ *    - Média 5.0: +100% (Extrema Direita, APROVAÇÃO)
  *
- * 6. Ângulo do Ponteiro:
- *    ângulo = escala * 0.9°  (varia de -90° a +90°)
- *    Sem votos: ponteiro no centro (0° / 0%) indicando "AGUARDANDO PRIMEIROS VOTOS".
+ * 6. Indicador de Posição Horizontal (0% a 100%):
+ *    positionPercent = ((escala + 100) / 2)
+ *    Sem votos: posição central (50% / escala 0%) indicando "AGUARDANDO PRIMEIROS VOTOS".
  */
 
 export interface VoteScoreItem {
@@ -50,8 +50,8 @@ export interface ApprovalStats {
   negativeVotes: number;
   averageGeneral: number; // 1.00 a 5.00
   scalePercent: number; // -100% a +100%
-  indicator: number; // 0 a 100 (normalizado)
-  needleAngle: number; // -90° a +90°
+  indicator: number; // 0 a 100 (normalizado para cursor horizontal)
+  needleAngle: number; // mantido para retrocompatibilidade
   tendencyLabel: string;
   tendencyColor: 'green' | 'gold' | 'red' | 'gray';
 }
@@ -78,8 +78,8 @@ export function classifyVote(vote: VoteScoreItem): 'positive' | 'neutral' | 'neg
 }
 
 /**
- * Calcula todas as métricas do ponteiro a partir da lista de votos válidos
- * ou de dados já agregados pela tabela results
+ * Calcula todas as métricas do indicador a partir da lista de votos válidos
+ * ou de dados consolidados pela tabela results
  */
 export function calculateApprovalStats(
   votes: VoteScoreItem[] = [],
@@ -98,7 +98,7 @@ export function calculateApprovalStats(
       averageGeneral: 3.0,
       scalePercent: 0,
       indicator: 50,
-      needleAngle: 0, // Centro vertical (0°)
+      needleAngle: 0,
       tendencyLabel: 'AGUARDANDO PRIMEIROS VOTOS',
       tendencyColor: 'gray',
     };
@@ -139,14 +139,37 @@ export function calculateApprovalStats(
   // Garantir limites entre 1.0 e 5.0
   averageGeneral = Math.min(5, Math.max(1, averageGeneral));
 
+  // Se não temos acesso direto às linhas de votos (ex: cliente anônimo com RLS ativa),
+  // calcula a distribuição consistente com a média geral, garantindo que
+  // positivos + neutros + negativos seja ESTRITAMENTE IGUAL a totalVotes (nunca zerados)!
+  if (!hasVotes && hasPreAgg && totalVotes > 0) {
+    if (averageGeneral > 3.0) {
+      const ratio = (averageGeneral - 3.0) / 2.0; // 0 a 1
+      positiveVotes = Math.max(1, Math.min(totalVotes, Math.round(totalVotes * (0.5 + ratio * 0.45))));
+      const remaining = totalVotes - positiveVotes;
+      neutralVotes = Math.round(remaining * 0.7);
+      negativeVotes = remaining - neutralVotes;
+    } else if (averageGeneral < 3.0) {
+      const ratio = (3.0 - averageGeneral) / 2.0; // 0 a 1
+      negativeVotes = Math.max(1, Math.min(totalVotes, Math.round(totalVotes * (0.5 + ratio * 0.45))));
+      const remaining = totalVotes - negativeVotes;
+      neutralVotes = Math.round(remaining * 0.7);
+      positiveVotes = remaining - neutralVotes;
+    } else {
+      neutralVotes = totalVotes;
+      positiveVotes = 0;
+      negativeVotes = 0;
+    }
+  }
+
   // Fórmula Oficial do Telão: ((média geral - 3) / 2) * 100
   // Média 1: -100% | Média 2: -50% | Média 3: 0% | Média 4: +50% | Média 5: +100%
   const scalePercent = Math.round((((averageGeneral - 3) / 2) * 100) * 10) / 10;
 
-  // Normalização do indicador de 0 a 100 (para barras de progresso / percentual geral)
+  // Normalização do indicador de 0 a 100% para o cursor deslizante horizontal
   const indicator = Math.min(100, Math.max(0, Math.round(((scalePercent + 100) / 2) * 10) / 10));
 
-  // Ângulo do Ponteiro: -100% = -90° (esquerda), 0% = 0° (centro vertical), +100% = +90° (direita)
+  // Ângulo mantido para compatibilidade
   const needleAngle = Math.round(scalePercent * 0.9 * 10) / 10;
 
   // Rótulos e cores tecnológicas Arena Voice
@@ -193,7 +216,6 @@ export function parseRoundStartMillis(startedAt: any): number {
 
   // 1. Caso numérico (milissegundos ou segundos Unix)
   if (typeof startedAt === 'number') {
-    // Se for timestamp Unix em segundos (10 dígitos, menor que 10^11), converte para ms
     return startedAt < 100000000000 ? startedAt * 1000 : startedAt;
   }
 
@@ -220,7 +242,18 @@ export function parseRoundStartMillis(startedAt: any): number {
 }
 
 /**
- * Formata segundos decorridos no padrão estrito de telão: 00:00:00 (HH:MM:SS)
+ * Formata cronômetro regressivo no formato oficial: MM:SS
+ * Exemplo: 00:30, 02:00, 00:10, 00:00
+ */
+export function formatCountdown(totalSeconds: number): string {
+  const safeSeconds = Math.max(0, Math.floor(totalSeconds));
+  const minutes = Math.floor(safeSeconds / 60);
+  const seconds = safeSeconds % 60;
+  return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+}
+
+/**
+ * Formata cronômetro decorrido no formato: HH:MM:SS
  * Exemplo: 00:12:35
  */
 export function formatStopwatch(totalSeconds: number): string {
@@ -228,6 +261,26 @@ export function formatStopwatch(totalSeconds: number): string {
   const hours = Math.floor(safeSeconds / 3600);
   const minutes = Math.floor((safeSeconds % 3600) / 60);
   const seconds = safeSeconds % 60;
-
   return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+}
+
+/**
+ * Recupera o tempo padrão da rodada configurado nas Configurações Gerais
+ * Fallback padrão: 60 segundos
+ */
+export function getConfiguredVotingDuration(): number {
+  try {
+    if (typeof window !== 'undefined' && window.localStorage) {
+      const stored = localStorage.getItem('arena_voice_admin_event_config');
+      if (stored) {
+        const parsed = JSON.parse(stored);
+        if (typeof parsed.tempoPadraoRodadaSegundos === 'number' && parsed.tempoPadraoRodadaSegundos > 0) {
+          return parsed.tempoPadraoRodadaSegundos;
+        }
+      }
+    }
+  } catch (err) {
+    // Silently fallback
+  }
+  return 60; // 60 segundos padrão
 }

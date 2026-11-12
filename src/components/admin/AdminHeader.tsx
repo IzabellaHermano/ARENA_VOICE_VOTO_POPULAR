@@ -1,5 +1,5 @@
 import React from 'react';
-import { Menu, ExternalLink, Trophy, ShieldCheck, Shield, UserCheck } from 'lucide-react';
+import { Menu, ExternalLink, ShieldCheck, Shield, UserCheck, Tv } from 'lucide-react';
 import { useAdminAuth } from '@/hooks/useAdminAuth';
 
 export interface AdminHeaderProps {
@@ -37,15 +37,15 @@ export const AdminHeader: React.FC<AdminHeaderProps> = ({
       </div>
 
       <div className="flex items-center gap-3">
-        {/* Telão Shortcut */}
+        {/* Telão Oficial */}
         <a
-          href="/resultados/telao"
+          href="/telao"
           target="_blank"
           rel="noopener noreferrer"
-          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold bg-arena-gold/15 text-arena-gold border border-arena-gold/40 hover:bg-arena-gold/25 transition-all shadow-yellow-glow"
+          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold bg-arena-red/15 text-arena-red border border-arena-red/40 hover:bg-arena-red/25 transition-all shadow-neon-glow"
         >
-          <Trophy className="w-3.5 h-3.5" />
-          <span className="hidden sm:inline">Exibir Telão</span>
+          <Tv className="w-3.5 h-3.5" />
+          <span className="hidden sm:inline">Telão Oficial</span>
           <ExternalLink className="w-3 h-3" />
         </a>
 
