@@ -1,9 +1,16 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { useParams, useLocation } from 'react-router-dom';
 import { ArenaLogo, ArenaMascot } from '@/components/branding';
-import { QRCodeDisplay } from '@/components/qrcode';
 import { ApprovalGauge } from '@/components/admin/ApprovalGauge';
+import {
+  BigScreenWelcomeView,
+  BigScreenWaitingNextView,
+  BigScreenQRCodeView,
+  BigScreenNavigation,
+  BigScreenMode,
+} from '@/components/telao';
 import { EventService, DEFAULT_EVENT_ID } from '@/services/eventService';
+import { supabase } from '@/supabase/client';
 import { ProjectDocument, RoundDocument, ResultDocument, EventDocument } from '@/types';
 import {
   ApprovalStats,
@@ -13,6 +20,8 @@ import {
   getConfiguredVotingDuration,
 } from '@/utils/approvalCalculator';
 import { buildRankedResults } from '@/utils/scoring';
+import { getPublicVotingUrl } from '@/utils/url';
+import { QRCodeSVG } from 'qrcode.react';
 import {
   Trophy,
   Award,
@@ -26,6 +35,7 @@ import {
   Lock,
   ClockAlert,
   Radio,
+  QrCode,
 } from 'lucide-react';
 
 export const BigScreenPresentationPage: React.FC = () => {
@@ -70,6 +80,8 @@ export const BigScreenPresentationPage: React.FC = () => {
     return paramEventId || queryEventId || activeDbEventId || DEFAULT_EVENT_ID;
   }, [paramEventId, queryEventId, activeDbEventId]);
 
+  const votingUrl = getPublicVotingUrl();
+
   const [activeEvent, setActiveEvent] = useState<EventDocument | null>(null);
   const [activeRound, setActiveRound] = useState<RoundDocument | null>(null);
   const [projects, setProjects] = useState<ProjectDocument[]>([]);
@@ -78,6 +90,8 @@ export const BigScreenPresentationPage: React.FC = () => {
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const [configuredDuration, setConfiguredDuration] = useState(() => getConfiguredVotingDuration());
   const [approvalStats, setApprovalStats] = useState<ApprovalStats>(() => calculateApprovalStats([]));
+  const [displayMode, setDisplayMode] = useState<BigScreenMode>('auto');
+  const [hasStartedAnyRound, setHasStartedAnyRound] = useState(false);
 
   // 1. Escuta o evento principal em tempo real no Supabase
   useEffect(() => {
@@ -97,7 +111,7 @@ export const BigScreenPresentationPage: React.FC = () => {
     return () => unsub();
   }, [targetEventId]);
 
-  // 3. Monitora o ciclo de vida completo da rodada (Aguardando -> Aberta -> Encerrada)
+  // 3. Monitora o ciclo de vida da rodada ativa / mais recente
   useEffect(() => {
     if (!targetEventId) return;
     const unsub = EventService.subscribeToLatestRound(targetEventId, (round) => {
@@ -106,7 +120,33 @@ export const BigScreenPresentationPage: React.FC = () => {
     return () => unsub();
   }, [targetEventId]);
 
-  // 4. Escuta os resultados agregados de todos os projetos em tempo real
+  // 4. Verifica histórico de rodadas para identificar com segurança se o evento já foi iniciado
+  useEffect(() => {
+    if (!targetEventId) return;
+
+    const checkRoundsHistory = async () => {
+      try {
+        const { count, error } = await supabase
+          .from('rounds')
+          .select('id', { count: 'exact', head: true })
+          .eq('event_id', targetEventId);
+
+        if (!error && count && count > 0) {
+          setHasStartedAnyRound(true);
+        } else if (activeRound) {
+          setHasStartedAnyRound(true);
+        } else {
+          setHasStartedAnyRound(false);
+        }
+      } catch {
+        if (activeRound) setHasStartedAnyRound(true);
+      }
+    };
+
+    checkRoundsHistory();
+  }, [targetEventId, activeRound]);
+
+  // 5. Escuta todos os resultados consolidados do evento em tempo real
   useEffect(() => {
     if (!targetEventId) return;
     const unsub = EventService.subscribeToAllEventResults(targetEventId, (resList) => {
@@ -117,19 +157,19 @@ export const BigScreenPresentationPage: React.FC = () => {
     return () => unsub();
   }, [targetEventId]);
 
-  // 5. Atualiza duração configurada ao montar ou quando mudar configurações
+  // 6. Atualiza duração configurada ao montar
   useEffect(() => {
     setConfiguredDuration(getConfiguredVotingDuration());
   }, []);
 
-  // 6. Lista de projetos ativos ordenados rigidamente por order
+  // 7. Lista de projetos ativos ordenados rigidamente por order
   const activeProjectsSorted = useMemo(() => {
     return [...projects]
       .filter((p) => p.active)
       .sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
   }, [projects]);
 
-  // 7. Projeto Ativo na Rodada
+  // 8. Identificação do Projeto Ativo
   const activeProject = useMemo(() => {
     const targetId = activeRound?.projectId || activeEvent?.currentProjectId;
     if (!targetId) return null;
@@ -149,7 +189,7 @@ export const BigScreenPresentationPage: React.FC = () => {
     return `PROJETO ${String(num).padStart(2, '0')} DE ${String(totalProjectsCount).padStart(2, '0')}`;
   }, [currentProjectIndex, totalProjectsCount, activeProject?.order]);
 
-  // 8. Ponteiro Dinâmico: Sincronização em tempo real para o projeto ativo
+  // 9. Ponteiro Dinâmico: Sincronização em tempo real para o projeto ativo
   useEffect(() => {
     if (!activeProject?.id) {
       setApprovalStats(calculateApprovalStats([]));
@@ -168,8 +208,7 @@ export const BigScreenPresentationPage: React.FC = () => {
     return () => unsub();
   }, [targetEventId, activeProject?.id, activeRound?.id]);
 
-  // 9. Cronômetro Regressivo Oficial do Servidor (Baseado em startedAt e duração)
-  // Imune a refresh da aba e reconexões de rede
+  // 10. Cronômetro Regressivo Oficial do Servidor (Baseado em startedAt e duração)
   useEffect(() => {
     if (!activeRound?.startedAt) {
       setElapsedSeconds(0);
@@ -182,7 +221,7 @@ export const BigScreenPresentationPage: React.FC = () => {
       return;
     }
 
-    // Se a rodada estiver encerrada, o tempo congela na duração final
+    // Se a rodada estiver encerrada, congela na duração final
     if (activeRound.status === 'closed') {
       const endMillis = activeRound.endedAt ? parseRoundStartMillis(activeRound.endedAt) : Date.now();
       const finalDiff = Math.max(0, Math.floor((endMillis - startMillis) / 1000));
@@ -195,7 +234,6 @@ export const BigScreenPresentationPage: React.FC = () => {
       return;
     }
 
-    // Rodada Aberta: Atualiza a cada segundo
     const updateTimer = () => {
       const now = Date.now();
       const diff = Math.max(0, Math.floor((now - startMillis) / 1000));
@@ -207,7 +245,6 @@ export const BigScreenPresentationPage: React.FC = () => {
     return () => clearInterval(interval);
   }, [activeRound?.status, activeRound?.startedAt, activeRound?.endedAt]);
 
-  // Cálculo do tempo restante em contagem regressiva sincronizada
   const effectiveRoundDuration = useMemo(() => {
     if (activeRound?.durationSeconds) {
       return activeRound.durationSeconds;
@@ -222,25 +259,62 @@ export const BigScreenPresentationPage: React.FC = () => {
 
   const isUrgentTimer = activeRound?.status === 'open' && remainingSeconds <= 10 && remainingSeconds > 0;
 
-  // 10. ESTADOS DO TELÃO ÚNICO OFICIAL
-  // Estado 1.4: Resultado Oficial (resultsPublished = true)
-  // Estado 1.2: Projeto em Apresentação e Votação (round.status = 'open')
-  // Estado 1.3: Estado Entre Projetos (round.status = 'closed')
-  // Estado 1.1: Aguardando Início (sem rodada ativa / esperando início)
-  const telaoState: '1.1_waiting_start' | '1.2_active_voting' | '1.3_between_projects' | '1.4_final_results' = useMemo(() => {
-    if (activeEvent?.resultsPublished) {
-      return '1.4_final_results';
-    }
-    if (activeRound?.status === 'open' && activeProject) {
-      return '1.2_active_voting';
-    }
-    if (activeRound?.status === 'closed' && activeProject) {
-      return '1.3_between_projects';
-    }
-    return '1.1_waiting_start';
-  }, [activeEvent?.resultsPublished, activeRound?.status, activeProject]);
+  // 11. MÁQUINA DE ESTADOS DO MODO AUTOMÁTICO
+  type AutoState = 'welcome' | 'active_voting' | 'round_closed' | 'waiting_next' | 'final_results';
 
-  // Ranking calculado para o Pódio Oficial (Estado 1.4)
+  const autoState: AutoState = useMemo(() => {
+    // 1. Pódio Oficial Homologado
+    if (activeEvent?.resultsPublished) {
+      return 'final_results';
+    }
+
+    // 2. Rodada Ativa no Palco
+    if (activeRound?.status === 'open' && activeProject) {
+      return 'active_voting';
+    }
+
+    // 3. Antes de iniciar qualquer apresentação / sem rodadas abertas ou fechadas
+    if (!hasStartedAnyRound && !activeRound) {
+      return 'welcome';
+    }
+
+    // 4. Rodada foi encerrada e admin AINDA NÃO clicou em "Próximo Projeto"
+    // (a rodada encerrada corresponde ao projeto atual do evento)
+    if (
+      activeRound?.status === 'closed' &&
+      activeRound?.projectId &&
+      activeEvent?.currentProjectId === activeRound.projectId
+    ) {
+      return 'round_closed';
+    }
+
+    // 5. Admin clicou em "Próximo Projeto":
+    // A rodada anterior foi desconectada e o sistema aguarda o próximo projeto
+    return 'waiting_next';
+  }, [
+    activeEvent?.resultsPublished,
+    activeEvent?.currentProjectId,
+    activeRound?.status,
+    activeRound?.projectId,
+    activeProject,
+    hasStartedAnyRound,
+  ]);
+
+  // 12. Visualização Efetiva baseada no Modo Selecionado
+  const activeView: AutoState | 'qrcode' = useMemo(() => {
+    if (displayMode === 'qrcode') {
+      return 'qrcode';
+    }
+    if (displayMode === 'live') {
+      if (activeEvent?.resultsPublished) return 'final_results';
+      if (activeRound?.status === 'closed') return 'round_closed';
+      if (activeRound?.status === 'open' && activeProject) return 'active_voting';
+      return 'waiting_next';
+    }
+    return autoState;
+  }, [displayMode, autoState, activeEvent?.resultsPublished, activeRound?.status, activeProject]);
+
+  // Ranking calculado para o Pódio Oficial
   const rankedResults = useMemo(() => {
     const resultsMap = new Map<string, ResultDocument>();
     resultsList.forEach((r) => resultsMap.set(r.projectId, r));
@@ -255,6 +329,36 @@ export const BigScreenPresentationPage: React.FC = () => {
     return res?.totalVotes || 0;
   }, [approvalStats.totalVotes, activeProject?.id, resultsList]);
 
+  // Heartbeat resiliente para atualização contínua de votos em tempo real no telão
+  useEffect(() => {
+    if (activeView !== 'active_voting' || !activeProject?.id || !targetEventId) return;
+
+    const interval = setInterval(async () => {
+      try {
+        const { data } = await supabase
+          .from('results')
+          .select('total_votes, average_general')
+          .eq('event_id', targetEventId)
+          .eq('project_id', activeProject.id)
+          .maybeSingle();
+
+        if (data && typeof data.total_votes === 'number') {
+          if (data.total_votes > approvalStats.totalVotes) {
+            setApprovalStats((prev) => ({
+              ...prev,
+              totalVotes: data.total_votes,
+              averageGeneral: data.average_general ?? prev.averageGeneral,
+            }));
+          }
+        }
+      } catch {
+        // silencioso
+      }
+    }, 2000);
+
+    return () => clearInterval(interval);
+  }, [activeView, activeProject?.id, targetEventId, approvalStats.totalVotes]);
+
   const toggleFullscreen = () => {
     if (!document.fullscreenElement) {
       document.documentElement.requestFullscreen().then(() => setIsFullscreen(true)).catch(() => {});
@@ -262,6 +366,65 @@ export const BigScreenPresentationPage: React.FC = () => {
       document.exitFullscreen().then(() => setIsFullscreen(false)).catch(() => {});
     }
   };
+
+  // Sub-rótulo para exibição na barra de navegação no Modo Automático
+  const autoSubStateLabel = useMemo(() => {
+    switch (autoState) {
+      case 'welcome':
+        return 'Boas-Vindas';
+      case 'active_voting':
+        return 'Ao Vivo';
+      case 'round_closed':
+        return 'Encerrada';
+      case 'waiting_next':
+        return 'Aguardando';
+      case 'final_results':
+        return 'Pódio';
+    }
+  }, [autoState]);
+
+  // Badge do Header
+  const headerStatusBadge = useMemo(() => {
+    if (displayMode === 'qrcode') {
+      return {
+        label: 'QR Code de Acesso',
+        icon: <QrCode className="w-3.5 h-3.5 text-arena-gold" />,
+      };
+    }
+    if (displayMode === 'live') {
+      return {
+        label: 'Rodada ao Vivo no Palco',
+        icon: <Radio className="w-3.5 h-3.5 text-arena-blue animate-pulse" />,
+      };
+    }
+    switch (autoState) {
+      case 'welcome':
+        return {
+          label: 'Aguardando Início Oficial',
+          icon: <Radio className="w-3.5 h-3.5 text-gray-400" />,
+        };
+      case 'active_voting':
+        return {
+          label: 'Votação Aberta no Palco',
+          icon: <span className="w-2.5 h-2.5 rounded-full bg-arena-red animate-ping" />,
+        };
+      case 'round_closed':
+        return {
+          label: 'Votação Encerrada',
+          icon: <Lock className="w-3.5 h-3.5 text-arena-gold" />,
+        };
+      case 'waiting_next':
+        return {
+          label: 'Aguardando Próximo Projeto',
+          icon: <Lock className="w-3.5 h-3.5 text-arena-gold" />,
+        };
+      case 'final_results':
+        return {
+          label: 'Pódio Oficial Homologado',
+          icon: <Trophy className="w-3.5 h-3.5 text-arena-gold" />,
+        };
+    }
+  }, [displayMode, autoState]);
 
   const firstPlace = rankedResults.find((p) => p.rank === 1 && p.hasEvaluations);
   const secondPlace = rankedResults.find((p) => p.rank === 2 && p.hasEvaluations);
@@ -271,7 +434,7 @@ export const BigScreenPresentationPage: React.FC = () => {
   );
 
   return (
-    <div className="min-h-screen bg-[#07080D] text-white p-4 sm:p-6 lg:p-8 flex flex-col justify-between relative overflow-hidden select-none">
+    <div className="min-h-screen bg-[#050810] text-white p-4 sm:p-6 lg:p-8 flex flex-col justify-between relative overflow-hidden select-none">
       {/* Background Atmosférico Oficial Arena Voice */}
       <div className="absolute top-0 left-1/4 w-[750px] h-[450px] bg-arena-red/12 blur-[170px] pointer-events-none" />
       <div className="absolute top-1/3 right-1/4 w-[650px] h-[400px] bg-arena-blue/10 blur-[160px] pointer-events-none" />
@@ -280,33 +443,14 @@ export const BigScreenPresentationPage: React.FC = () => {
       </div>
 
       {/* Header Oficial do Telão 16:9 */}
-      <header className="flex flex-col sm:flex-row items-center justify-between gap-4 border-b border-white/10 pb-4 relative z-10">
-        <ArenaLogo variant="complete" width={320} />
+      <header className="flex flex-col sm:flex-row items-center justify-between gap-4 border-b border-white/10 pb-4 relative z-20">
+        <ArenaLogo variant="complete" width={300} />
 
         <div className="flex items-center gap-4">
           {/* Badge Informativa do Telão */}
           <div className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-black/70 border border-white/15 text-xs font-black uppercase tracking-wider">
-            {telaoState === '1.2_active_voting' ? (
-              <>
-                <span className="w-2.5 h-2.5 rounded-full bg-arena-red animate-ping" />
-                <span className="text-arena-red font-mono">Votação ao Vivo no Palco</span>
-              </>
-            ) : telaoState === '1.3_between_projects' ? (
-              <>
-                <Lock className="w-3.5 h-3.5 text-arena-gold" />
-                <span className="text-gray-300">Aguardando Próximo Projeto</span>
-              </>
-            ) : telaoState === '1.4_final_results' ? (
-              <>
-                <Trophy className="w-3.5 h-3.5 text-arena-gold" />
-                <span className="text-arena-gold">Pódio Oficial Homologado</span>
-              </>
-            ) : (
-              <>
-                <Radio className="w-3.5 h-3.5 text-gray-400" />
-                <span className="text-gray-400">Aguardando Início</span>
-              </>
-            )}
+            {headerStatusBadge.icon}
+            <span className="font-mono text-gray-200">{headerStatusBadge.label}</span>
           </div>
 
           <button
@@ -320,46 +464,26 @@ export const BigScreenPresentationPage: React.FC = () => {
       </header>
 
       {/* ============================================================ */}
-      {/* ESTADO 1.1 — AGUARDANDO INÍCIO                               */}
-      {/* Quando o evento está aberto mas nenhum projeto está ativo   */}
+      {/* CORPO CENTRAL DO TELÃO: RENDERIZAÇÃO DA VISUALIZAÇÃO ATIVA    */}
       {/* ============================================================ */}
-      {telaoState === '1.1_waiting_start' && (
-        <main className="flex-1 flex flex-col items-center justify-center py-6 sm:py-10 z-10 text-center space-y-6 animate-fade-in max-w-4xl mx-auto w-full">
-          <div className="space-y-3">
-            <div className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full bg-arena-gold/15 text-arena-gold border border-arena-gold/30 text-xs font-black uppercase tracking-widest shadow-gold-glow">
-              <Sparkles className="w-4 h-4 text-arena-gold" />
-              <span>Arena Voice 2026 • Inovação Ferroviária CPTM</span>
-            </div>
 
-            <h1 className="text-4xl sm:text-6xl lg:text-7xl font-black tracking-tight text-white uppercase">
-              EM INSTANTES, <span className="text-arena-red">A VOZ É SUA</span>
-            </h1>
-
-            <div className="inline-block px-5 py-2 rounded-2xl bg-white/5 border border-white/10 text-gray-200 text-sm sm:text-lg font-bold uppercase tracking-wider">
-              Aguarde o início das apresentações para avaliar os projetos no palco
-            </div>
-
-            <p className="text-sm sm:text-base text-gray-300 max-w-xl mx-auto font-medium leading-relaxed">
-              Aponte a câmera do seu celular para entrar na arena de votação.
-            </p>
-          </div>
-
-          {/* QR Code centralizado, limpo e de alta legibilidade */}
-          <div className="p-4 bg-gradient-to-b from-arena-red/30 via-white/5 to-arena-gold/30 rounded-[40px] shadow-[0_20px_60px_rgba(227,6,19,0.25)] border border-white/20">
-            <QRCodeDisplay size={280} showActions={false} />
-          </div>
-
-          <div className="space-y-1 text-xs text-gray-400 font-mono">
-            <p>Conexão atômica e segura via Supabase • Um voto por participante por projeto</p>
-            <p className="text-gray-500">Mantenha a página aberta no seu smartphone para votar instantaneamente</p>
-          </div>
-        </main>
+      {/* 1. MODO QR CODE ESTILIZADO */}
+      {activeView === 'qrcode' && (
+        <BigScreenQRCodeView size={280} />
       )}
 
-      {/* ============================================================ */}
-      {/* ESTADO 1.2 — PROJETO EM APRESENTAÇÃO E VOTAÇÃO               */}
-      {/* ============================================================ */}
-      {telaoState === '1.2_active_voting' && (
+      {/* 2. TELA DE BOAS-VINDAS */}
+      {activeView === 'welcome' && (
+        <BigScreenWelcomeView onOpenQRCode={() => setDisplayMode('qrcode')} />
+      )}
+
+      {/* 3. TELA DE AGUARDANDO PRÓXIMO PROJETO */}
+      {activeView === 'waiting_next' && (
+        <BigScreenWaitingNextView />
+      )}
+
+      {/* 4. TELA DE PROJETO EM APRESENTAÇÃO E VOTAÇÃO AO VIVO */}
+      {activeView === 'active_voting' && (
         <main className="flex-1 flex flex-col justify-center py-4 sm:py-6 z-10 max-w-7xl mx-auto w-full animate-fade-in">
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 sm:gap-6 items-stretch">
             {/* LADO ESQUERDO: BANNER OFICIAL E DADOS DO PROJETO (5 colunas) */}
@@ -383,13 +507,13 @@ export const BigScreenPresentationPage: React.FC = () => {
                     {activeProject?.name || 'Projeto em Apresentação'}
                   </h2>
                   {activeProject?.category && (
-                    <span className="inline-block mt-1 text-xs sm:text-sm font-bold text-arena-blueLight">
+                    <span className="inline-block mt-1 text-xs sm:text-sm font-bold text-arena-blue">
                       {activeProject.category}
                     </span>
                   )}
                 </div>
 
-                {/* Descrição Oficial do Projeto */}
+                {/* Descrição Oficial */}
                 {activeProject?.description && (
                   <p className="text-xs sm:text-sm text-gray-300 leading-relaxed line-clamp-3">
                     {activeProject.description}
@@ -409,34 +533,36 @@ export const BigScreenPresentationPage: React.FC = () => {
                   <div className="w-full h-full flex flex-col items-center justify-center p-6 text-center">
                     <ArenaLogo variant="textWithSlogan" width={260} />
                     <span className="text-xs font-bold text-gray-400 mt-2 uppercase tracking-wider">
-                      Arena Voice • Inovação Ferroviária CPTM
+                      Arena Voice • Voto Popular
                     </span>
                   </div>
                 )}
               </div>
 
-              {/* Mini QR Code para retardatários */}
-              <div className="p-3.5 rounded-2xl bg-white/[0.03] border border-white/10 flex items-center gap-3.5 shadow-lg">
-                <div className="p-1.5 bg-white rounded-xl shrink-0">
-                  <QRCodeDisplay size={70} showActions={false} />
+              {/* Mini QR Code Estilizado no Novo Padrão Escuro */}
+              <div className="p-3.5 rounded-2xl bg-gradient-to-r from-white/5 to-white/[0.02] border border-arena-gold/30 flex items-center gap-3.5 shadow-lg">
+                <div className="p-2 bg-white rounded-xl shadow-md shrink-0">
+                  <QRCodeSVG value={votingUrl} size={68} level="M" bgColor="#FFFFFF" fgColor="#050810" />
                 </div>
                 <div>
                   <h4 className="text-xs font-bold text-white flex items-center gap-1.5">
-                    <span>Ainda não votou?</span>
-                    <span className="text-arena-red animate-pulse">• Aberto</span>
+                    <span className="text-arena-gold">Acesse a Votação</span>
+                    <span className="w-2 h-2 rounded-full bg-arena-red animate-ping" />
                   </h4>
-                  <p className="text-[11px] text-gray-400 leading-snug mt-0.5">
-                    Aponte seu smartphone para o código ao lado e avalie nos 3 critérios oficiais antes do encerramento.
+                  <p className="text-[11px] text-gray-300 leading-snug mt-0.5">
+                    Aponte seu celular para avaliar o projeto no palco.
                   </p>
+                  <span className="text-[10px] text-arena-blue font-mono mt-0.5 block">
+                    {votingUrl.replace(/^https?:\/\//, '')}
+                  </span>
                 </div>
               </div>
             </div>
 
-            {/* LADO DIREITO: CRONÔMETRO REGRESSIVO, PONTEIRO DINÂMICO E MÉTRICAS (7 colunas) */}
+            {/* LADO DIREITO: CRONÔMETRO REGRESSIVO, INDICADOR DE APROVAÇÃO E VOTOS (7 colunas) */}
             <div className="lg:col-span-7 flex flex-col justify-between space-y-4">
-              {/* Cronômetro Regressivo e Contador de Votos */}
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
-                {/* Cronômetro Regressivo Oficial (MM:SS) com Urgência nos últimos 10s */}
+                {/* Cronômetro Regressivo Oficial */}
                 <div
                   className={`p-4 rounded-3xl border transition-all flex items-center justify-between ${
                     isUrgentTimer
@@ -499,7 +625,7 @@ export const BigScreenPresentationPage: React.FC = () => {
                 </div>
               </div>
 
-              {/* NOVO INDICADOR HORIZONTAL TECNOLÓGICO DE APROVAÇÃO */}
+              {/* Indicador Tecnológico de Aprovação */}
               <ApprovalGauge
                 stats={approvalStats}
                 roundStatus="aberta"
@@ -510,11 +636,8 @@ export const BigScreenPresentationPage: React.FC = () => {
         </main>
       )}
 
-      {/* ============================================================ */}
-      {/* ESTADO 1.3 — ESTADO ENTRE PROJETOS                           */}
-      {/* Votação encerrada, exibe resultado congelado e aguarda       */}
-      {/* ============================================================ */}
-      {telaoState === '1.3_between_projects' && (
+      {/* 5. TELA DE PROJETO CONCLUÍDO (VOTAÇÃO ENCERRADA) */}
+      {activeView === 'round_closed' && (
         <main className="flex-1 flex flex-col justify-center py-4 sm:py-6 z-10 max-w-7xl mx-auto w-full animate-fade-in space-y-4">
           {/* Mensagem em Destaque: VOTAÇÃO ENCERRADA */}
           <div className="p-5 sm:p-6 rounded-3xl bg-gradient-to-r from-arena-red/30 via-[#7F1D1D]/40 to-arena-black border-2 border-arena-red shadow-[0_10px_40px_rgba(227,6,19,0.4)] flex flex-col sm:flex-row items-center justify-between gap-4 text-center sm:text-left">
@@ -537,7 +660,7 @@ export const BigScreenPresentationPage: React.FC = () => {
             </div>
           </div>
 
-          {/* Grid do Projeto Recém-Avaliado e Consolidação Congelada */}
+          {/* Grid do Projeto Recém-Avaliado */}
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 sm:gap-6 items-stretch">
             {/* LADO ESQUERDO: Informações do Projeto Avaliado */}
             <div className="lg:col-span-5 flex flex-col justify-between space-y-4">
@@ -555,7 +678,7 @@ export const BigScreenPresentationPage: React.FC = () => {
                   {activeProject?.name || 'Projeto Avaliado'}
                 </h2>
                 {activeProject?.category && (
-                  <span className="text-xs font-bold text-arena-blueLight">
+                  <span className="text-xs font-bold text-arena-blue">
                     {activeProject.category}
                   </span>
                 )}
@@ -574,14 +697,21 @@ export const BigScreenPresentationPage: React.FC = () => {
                 )}
               </div>
 
-              {/* Mini QR Code para quem quiser se conectar antes do próximo projeto */}
-              <div className="p-3 rounded-2xl bg-white/[0.03] border border-white/10 flex items-center gap-3">
-                <div className="p-1.5 bg-white rounded-xl shrink-0">
-                  <QRCodeDisplay size={64} showActions={false} />
+              {/* Mini QR Code Estilizado */}
+              <div className="p-3.5 rounded-2xl bg-gradient-to-r from-white/5 to-white/[0.02] border border-arena-gold/30 flex items-center gap-3.5 shadow-lg">
+                <div className="p-2 bg-white rounded-xl shadow-md shrink-0">
+                  <QRCodeSVG value={votingUrl} size={64} level="M" bgColor="#FFFFFF" fgColor="#050810" />
                 </div>
-                <div className="text-[11px] text-gray-400">
-                  <span className="font-bold text-white block">Aguarde o próximo projeto</span>
-                  Escaneie agora para ficar pronto para a próxima votação.
+                <div>
+                  <h4 className="text-xs font-bold text-white flex items-center gap-1.5">
+                    <span className="text-arena-gold">Aguarde o próximo projeto</span>
+                  </h4>
+                  <p className="text-[11px] text-gray-300 leading-snug mt-0.5">
+                    Mantenha conectado para a próxima votação.
+                  </p>
+                  <span className="text-[10px] text-arena-blue font-mono mt-0.5 block">
+                    {votingUrl.replace(/^https?:\/\//, '')}
+                  </span>
                 </div>
               </div>
             </div>
@@ -635,16 +765,13 @@ export const BigScreenPresentationPage: React.FC = () => {
         </main>
       )}
 
-      {/* ============================================================ */}
-      {/* ESTADO 1.4 — ESTADO FINAL: RESULTADO OFICIAL E PÓDIO          */}
-      {/* Ativado quando o administrador publica os resultados         */}
-      {/* ============================================================ */}
-      {telaoState === '1.4_final_results' && (
+      {/* 6. TELA DE RESULTADO OFICIAL / PÓDIO HOMOLOGADO */}
+      {activeView === 'final_results' && (
         <main className="flex-1 flex flex-col justify-center py-4 sm:py-6 z-10 max-w-6xl mx-auto w-full animate-fade-in space-y-6">
           <div className="text-center space-y-2">
             <div className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full bg-arena-gold/15 text-arena-gold border border-arena-gold/30 text-xs font-black uppercase tracking-widest shadow-gold-glow">
               <Sparkles className="w-4 h-4 text-arena-gold" />
-              <span>Consolidação Oficial • 20% Voto Popular + 80% Banca Técnica</span>
+              <span>Consolidação Oficial • Voto Popular Homologado</span>
             </div>
             <h1 className="text-3xl sm:text-5xl lg:text-6xl font-black text-white uppercase tracking-tight">
               RESULTADO OFICIAL — <span className="text-arena-gold">ARENA VOICE</span>
@@ -771,10 +898,19 @@ export const BigScreenPresentationPage: React.FC = () => {
         </main>
       )}
 
-      {/* Footer Minimalista e Elegante — Sem botões manuais de modo */}
-      <footer className="w-full pt-3 border-t border-white/10 z-20 flex flex-col sm:flex-row items-center justify-between gap-2 text-xs">
+      {/* ============================================================ */}
+      {/* BARRA DE NAVEGAÇÃO DISCRETA DO TELÃO (Item 3 do Prompt)       */}
+      {/* ============================================================ */}
+      <BigScreenNavigation
+        currentMode={displayMode}
+        onModeChange={setDisplayMode}
+        autoSubStateLabel={autoSubStateLabel}
+      />
+
+      {/* Footer Minimalista */}
+      <footer className="w-full pt-4 pb-14 sm:pb-12 border-t border-white/10 z-20 flex flex-col sm:flex-row items-center justify-between gap-2 text-xs">
         <span className="text-gray-400 font-medium text-[11px]">
-          Arena Voice 2026 • Telão 16:9 Oficial • Transmissão em Tempo Real Supabase
+          Arena Voice • Telão Oficial 16:9 • Transmissão em Tempo Real Supabase
         </span>
         <span className="text-gray-500 font-mono text-[10px]">
           Status do Sistema: Sincronizado

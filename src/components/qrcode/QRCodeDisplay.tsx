@@ -1,18 +1,20 @@
 import React, { useState, useRef } from 'react';
 import { QRCodeSVG } from 'qrcode.react';
 import { getPublicVotingUrl } from '@/utils/url';
-import { Copy, Check, Download, ExternalLink } from 'lucide-react';
+import { Copy, Check, Download, ExternalLink, Sparkles } from 'lucide-react';
 
 interface QRCodeDisplayProps {
   size?: number;
   showActions?: boolean;
   className?: string;
+  badgeLabel?: string;
 }
 
 export const QRCodeDisplay: React.FC<QRCodeDisplayProps> = ({
-  size = 280,
+  size = 260,
   showActions = true,
   className = '',
+  badgeLabel = 'ACESSE A VOTAÇÃO',
 }) => {
   const votingUrl = getPublicVotingUrl();
   const [copied, setCopied] = useState(false);
@@ -46,29 +48,37 @@ export const QRCodeDisplay: React.FC<QRCodeDisplayProps> = ({
 
   return (
     <div className={`flex flex-col items-center text-center space-y-4 ${className}`}>
-      {/* Moldura de Alto Contraste para Escaneamento Perfeito (sem sobreposição) */}
+      {/* Moldura Tecnológica Escura (Sem o grande cartão branco) */}
       <div
         ref={qrRef}
-        className="p-5 sm:p-6 bg-white rounded-3xl shadow-2xl border-4 border-arena-gold/30 flex items-center justify-center transition-transform hover:scale-[1.01]"
-        style={{ width: size + 48, height: size + 48 }}
+        className="relative group p-5 sm:p-6 rounded-[30px] bg-gradient-to-b from-[#131728] via-[#0C0F1B] to-[#070912] border-2 border-arena-gold/50 shadow-[0_0_50px_rgba(255,196,0,0.18)] flex flex-col items-center justify-center transition-all"
       >
-        <QRCodeSVG
-          value={votingUrl}
-          size={size}
-          level="H" // Alta correção de erro para facilidade de leitura por celulares
-          includeMargin={false}
-          bgColor="#FFFFFF"
-          fgColor="#050810"
-        />
-      </div>
+        {/* Glow Decorativo */}
+        <div className="absolute -inset-1 bg-gradient-to-r from-arena-red/15 via-arena-gold/20 to-arena-red/15 rounded-[32px] blur-md opacity-40 group-hover:opacity-70 transition-opacity pointer-events-none" />
 
-      {/* URL Exibida de Forma Clara */}
-      <div className="space-y-1 max-w-sm">
-        <p className="text-[11px] uppercase tracking-wider text-gray-400 font-semibold">
-          Link de Acesso Público
-        </p>
-        <div className="px-3 py-1.5 rounded-xl bg-black/60 border border-arena-border text-arena-blueLight font-mono text-xs truncate max-w-xs mx-auto">
-          {votingUrl}
+        {/* Badge Discreta Superior */}
+        {badgeLabel && (
+          <div className="relative mb-3 inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-arena-gold/15 border border-arena-gold/30 text-arena-gold text-[10px] font-black uppercase tracking-widest">
+            <Sparkles className="w-3 h-3 text-arena-gold" />
+            <span>{badgeLabel}</span>
+          </div>
+        )}
+
+        {/* Área Clara MÍNIMA Necessária para os Módulos Ópticos do QR Code */}
+        <div className="relative p-3.5 bg-white rounded-2xl shadow-xl flex items-center justify-center">
+          <QRCodeSVG
+            value={votingUrl}
+            size={size}
+            level="H" // Alta correção de erro para facilidade de leitura por celulares
+            includeMargin={false}
+            bgColor="#FFFFFF"
+            fgColor="#050810"
+          />
+        </div>
+
+        {/* Link de Acesso Público Discreto */}
+        <div className="relative mt-3.5 px-3.5 py-1.5 rounded-xl bg-black/60 border border-white/10 text-arena-blue font-mono text-[11px] font-semibold tracking-wide max-w-xs truncate">
+          {votingUrl.replace(/^https?:\/\//, '')}
         </div>
       </div>
 
@@ -97,7 +107,7 @@ export const QRCodeDisplay: React.FC<QRCodeDisplayProps> = ({
             className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-white/5 hover:bg-white/10 text-gray-200 border border-arena-border text-xs font-bold transition-colors"
             title="Download do QR Code em vetor SVG para banners e crachás"
           >
-            <Download className="w-3.5 h-3.5 text-arena-blueLight" />
+            <Download className="w-3.5 h-3.5 text-arena-blue" />
             <span>Baixar SVG</span>
           </button>
 
