@@ -1438,16 +1438,15 @@ export const EventService = {
     }
 
     try {
-      const [roundsRes, votesRes, resultsRes] = await Promise.all([
+      const [roundsRes, resultsRes] = await Promise.all([
         supabase.from('rounds').select('id', { count: 'exact', head: true }).eq('project_id', projectId),
-        supabase.from('votes').select('id', { count: 'exact', head: true }).eq('project_id', projectId),
-        supabase.from('results').select('id', { count: 'exact', head: true }).eq('project_id', projectId),
+        supabase.from('results').select('id, total_votes').eq('project_id', projectId).maybeSingle(),
       ]);
 
       const roundsCount = roundsRes.count || 0;
-      const votesCount = votesRes.count || 0;
-      const resultsCount = resultsRes.count || 0;
-      const hasHistory = roundsCount > 0 || votesCount > 0 || resultsCount > 0;
+      const votesCount = Number(resultsRes.data?.total_votes || 0);
+      const resultsCount = resultsRes.data ? 1 : 0;
+      const hasHistory = roundsCount > 0 || votesCount > 0;
 
       return {
         hasHistory,
@@ -1521,53 +1520,35 @@ export const EventService = {
   },
 
   /**
-   * Consulta e calcula as estatísticas reais de aprovação do projeto (Ponteiro Dinâmico)
-   * Baseado exclusivamente nos votos reais registrados no Supabase
+   * Consulta e calcula as estatísticas de aprovação consolidadas do projeto (Ponteiro Dinâmico)
+   * Utiliza exclusivamente a tabela public.results para garantir o SIGILO ABSOLUTO DO VOTO
    */
   async getProjectApprovalStats(
     eventId: string,
     projectId: string,
-    roundId?: string
+    _roundId?: string
   ): Promise<ApprovalStats> {
     if (!isSupabaseConfigured || !projectId) {
       return calculateApprovalStats([]);
     }
 
     try {
-      let query = supabase
-        .from('votes')
-        .select('innovation, impact, development, round_id')
-        .eq('event_id', eventId)
-        .eq('project_id', projectId);
-
-      if (roundId) {
-        query = query.eq('round_id', roundId);
-      }
-
-      const { data, error } = await query;
-      if (error) {
-        console.warn('Erro ao consultar votos para ponteiro de aprovação:', error.message);
-      }
-
-      // Consulta complementar à tabela results (pública e consolidada no Supabase)
-      const { data: resRow } = await supabase
+      // Consulta exclusivamente a tabela de métricas consolidadas public.results
+      const { data: resRow, error } = await supabase
         .from('results')
         .select('*')
         .eq('id', `${eventId}_${projectId}`)
         .maybeSingle();
 
-      const preAgg = resRow
-        ? {
-            totalVotes: Number(resRow.total_votes || 0),
-            averageGeneral: resRow.average_general !== null ? Number(resRow.average_general) : undefined,
-          }
-        : undefined;
-
-      if (data && data.length > 0) {
-        return calculateApprovalStats(data, preAgg);
+      if (error) {
+        console.warn('Erro ao consultar resultados consolidados para ponteiro:', error.message);
       }
 
-      if (preAgg && preAgg.totalVotes && preAgg.totalVotes > 0) {
+      if (resRow && resRow.total_votes > 0) {
+        const preAgg = {
+          totalVotes: Number(resRow.total_votes || 0),
+          averageGeneral: resRow.average_general !== null ? Number(resRow.average_general) : 3.0,
+        };
         return calculateApprovalStats([], preAgg);
       }
 
@@ -1580,7 +1561,7 @@ export const EventService = {
 
   /**
    * Monitora em tempo real as estatísticas de aprovação do projeto (Ponteiro Dinâmico)
-   * Dispara atualização após cada voto registrado no Supabase
+   * Dispara atualização após cada consolidação registrada em public.results
    */
   subscribeToProjectApprovalStats(
     eventId: string,
@@ -1603,7 +1584,7 @@ export const EventService = {
 
     fetchStats();
 
-    // Escuta mudanças atômicas em results (que é atualizado em cada voto) e em votes
+    // Escuta mudanças atômicas em public.results (atualizada atomicamente em cada voto registrado)
     const resultDocId = `${eventId}_${projectId}`;
     const channelId = `approval_gauge_${resultDocId}_${Date.now()}`;
     const channel = supabase
@@ -1611,13 +1592,6 @@ export const EventService = {
       .on(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'results', filter: `id=eq.${resultDocId}` },
-        () => {
-          fetchStats();
-        }
-      )
-      .on(
-        'postgres_changes',
-        { event: 'INSERT', schema: 'public', table: 'votes', filter: `project_id=eq.${projectId}` },
         () => {
           fetchStats();
         }
