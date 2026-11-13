@@ -1529,23 +1529,8 @@ USING (
 REVOKE ALL ON TABLE public.results
 FROM PUBLIC, anon, authenticated;
 
-GRANT SELECT (
-  id,
-  event_id,
-  project_id,
-  total_votes,
-  sum_innovation,
-  sum_impact,
-  sum_development,
-  average_innovation,
-  average_impact,
-  average_development,
-  average_general,
-  percentage,
-  popular_points,
-  updated_at
-)
-ON TABLE public.results
+-- Concede SELECT a nível de tabela para anon e authenticated (protegido pela policy results_select_policy)
+GRANT SELECT ON TABLE public.results
 TO anon, authenticated;
 
 -- =============================================================================

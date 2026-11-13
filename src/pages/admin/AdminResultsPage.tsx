@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { ArenaLogo } from '@/components/branding';
-import { EventService, DEFAULT_EVENT_ID } from '@/services/eventService';
+import { EventService, DEFAULT_EVENT_ID, mapResultRow } from '@/services/eventService';
 import { useAdminEvent } from '@/contexts/AdminEventContext';
 import { ProjectDocument, ResultDocument, EventDocument, EventSettings } from '@/types';
 import { SettingsService } from '@/services/settingsService';
@@ -78,8 +78,19 @@ export const AdminResultsPage: React.FC = () => {
   useEffect(() => {
     if (!activeEventId) return;
 
+    // Carga inicial imediata via RPC administrativa para resposta instantânea
+    EventService.getAdminResults(activeEventId)
+      .then((res) => {
+        if (res?.results && res.results.length > 0) {
+          setResultsList(res.results.map(mapResultRow));
+        }
+      })
+      .catch((err) => console.warn('Aviso getAdminResults inicial:', err));
+
     const unsub = EventService.subscribeToAllEventResults(activeEventId, (resList) => {
-      setResultsList(resList || []);
+      if (resList && resList.length > 0) {
+        setResultsList(resList);
+      }
     });
     return () => unsub();
   }, [activeEventId]);

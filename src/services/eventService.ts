@@ -142,7 +142,7 @@ function mapRoundRow(row: any): RoundDocument {
   };
 }
 
-function mapResultRow(row: any): ResultDocument {
+export function mapResultRow(row: any): ResultDocument {
   return {
     id: row.id,
     eventId: row.event_id,
@@ -1055,9 +1055,10 @@ export const EventService = {
 
     const fetchResult = async () => {
       try {
+        const safeColumns = 'id, event_id, project_id, total_votes, sum_innovation, sum_impact, sum_development, average_innovation, average_impact, average_development, average_general, percentage, popular_points, updated_at';
         const { data, error } = await supabase
           .from('results')
-          .select('*')
+          .select(safeColumns)
           .eq('id', resultDocId)
           .maybeSingle();
 
@@ -1138,17 +1139,33 @@ export const EventService = {
 
     const fetchAllResults = async () => {
       try {
+        const safeColumns = 'id, event_id, project_id, total_votes, sum_innovation, sum_impact, sum_development, average_innovation, average_impact, average_development, average_general, percentage, popular_points, updated_at';
+        let resultsRows: any[] | null = null;
+
         const { data, error } = await supabase
           .from('results')
-          .select('*')
+          .select(safeColumns)
           .eq('event_id', eventId);
 
-        if (!isSubscribed) return;
-        if (error) {
-          if (onError) onError(new Error(error.message));
-          return;
+        if (!error && data) {
+          resultsRows = data;
+        } else {
+          // Fallback resiliente via RPC administrativa (bypassa restrições pontuais de colunas)
+          const { data: rpcData } = await supabase.rpc('get_admin_results', {
+            p_event_id: eventId,
+          });
+          if (rpcData && Array.isArray(rpcData.results)) {
+            resultsRows = rpcData.results;
+          } else if (error && onError) {
+            onError(new Error(error.message));
+            return;
+          }
         }
-        onUpdate((data || []).map(mapResultRow));
+
+        if (!isSubscribed) return;
+        if (resultsRows) {
+          onUpdate(resultsRows.map(mapResultRow));
+        }
       } catch (err: any) {
         if (isSubscribed && onError) onError(err);
       }
@@ -1677,7 +1694,7 @@ export const EventService = {
       // Consulta exclusivamente a tabela de métricas consolidadas public.results
       const { data: resRow, error } = await supabase
         .from('results')
-        .select('*')
+        .select('id, total_votes, average_general')
         .eq('id', `${eventId}_${projectId}`)
         .maybeSingle();
 

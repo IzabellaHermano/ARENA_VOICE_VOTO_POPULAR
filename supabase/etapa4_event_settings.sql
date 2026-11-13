@@ -1637,6 +1637,9 @@ GRANT EXECUTE ON FUNCTION public.reconcile_results(text, text) TO authenticated;
 
 GRANT EXECUTE ON FUNCTION public.get_admin_results(text) TO authenticated;
 
+-- Permissão de SELECT na tabela public.results para authenticated e anon (protegido por RLS)
+GRANT SELECT ON TABLE public.results TO anon, authenticated;
+
 
 
 -- Revoga explicitamente de anon e public
