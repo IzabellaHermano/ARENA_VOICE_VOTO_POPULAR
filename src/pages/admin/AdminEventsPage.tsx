@@ -124,14 +124,14 @@ export const AdminEventsPage: React.FC = () => {
           bannerUrl: formBannerUrl.trim(),
           status: formStatus,
         });
-        setSuccessMessage(`Novo evento "${formName}" criado com sucesso no Supabase!`);
+        setSuccessMessage(`Novo evento "${formName}" criado com sucesso!`);
       }
 
       closeModal();
       setTimeout(() => setSuccessMessage(null), 4000);
     } catch (err: any) {
       console.error('Erro ao salvar evento:', err);
-      setErrorMessage(err.message || 'Falha ao salvar evento no banco.');
+      setErrorMessage(err.message || 'Falha ao salvar evento.');
     } finally {
       setIsSubmitting(false);
     }

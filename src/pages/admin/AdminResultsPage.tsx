@@ -99,7 +99,7 @@ export const AdminResultsPage: React.FC = () => {
       await EventService.toggleResultsPublished(activeEventId, newStatus);
       setActiveEvent((prev) => (prev ? { ...prev, resultsPublished: newStatus } : null));
     } catch (err) {
-      console.warn('Erro ao atualizar status de divulgação no Supabase:', err);
+      console.warn('Erro ao atualizar status de divulgação:', err);
       // Fallback local se erro
       setActiveEvent((prev) =>
         prev
@@ -122,10 +122,10 @@ export const AdminResultsPage: React.FC = () => {
             <ArenaLogo variant="textWithSlogan" width={240} />
           </div>
           <h2 className="text-xl sm:text-2xl font-black text-white mt-2">
-            Dashboard Geral de Resultados — Voto Popular (20%)
+            Dashboard Geral de Resultados — Voto Popular
           </h2>
           <p className="text-xs text-gray-400">
-            Apuração em tempo real com dados agregados do servidor • Máximo de 20 pontos por projeto
+            Apuração em tempo real com dados agregados do sistema.
           </p>
         </div>
 
@@ -241,7 +241,7 @@ export const AdminResultsPage: React.FC = () => {
       {isLoading ? (
         <div className="flex items-center justify-center p-12 gap-2 text-arena-blue text-sm">
           <Loader2 className="w-5 h-5 animate-spin" />
-          <span>Carregando dados agregados do servidor...</span>
+          <span>Carregando dados agregados do sistema...</span>
         </div>
       ) : (
         <>

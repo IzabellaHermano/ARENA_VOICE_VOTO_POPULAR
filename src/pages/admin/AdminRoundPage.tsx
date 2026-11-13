@@ -260,8 +260,8 @@ export const AdminRoundPage: React.FC = () => {
       setSuccessMessage('Votação encerrada com sucesso!');
       setTimeout(() => setSuccessMessage(null), 3000);
     } catch (err: any) {
-      console.error('Falha ao encerrar rodada no Supabase:', err);
-      setErrorMessage(err.message || 'Falha ao encerrar avaliação no servidor.');
+      console.error('Falha ao encerrar rodada:', err);
+      setErrorMessage(err.message || 'Falha ao encerrar avaliação.');
     } finally {
       setIsLoadingAction(false);
     }
@@ -283,8 +283,8 @@ export const AdminRoundPage: React.FC = () => {
       setSuccessMessage('Avaliação liberada com sucesso! Telão e celulares atualizados.');
       setTimeout(() => setSuccessMessage(null), 3000);
     } catch (err: any) {
-      console.error('Falha ao abrir rodada no Supabase:', err);
-      setErrorMessage(err.message || 'Falha ao liberar avaliação no servidor.');
+      console.error('Falha ao abrir rodada:', err);
+      setErrorMessage(err.message || 'Falha ao liberar avaliação.');
     } finally {
       setIsLoadingAction(false);
     }
@@ -308,7 +308,7 @@ export const AdminRoundPage: React.FC = () => {
       setTimeout(() => setSuccessMessage(null), 3000);
     } catch (err: any) {
       console.error('Falha ao preparar próximo projeto no Supabase:', err);
-      setErrorMessage(err.message || 'Falha ao preparar próximo projeto no servidor.');
+      setErrorMessage(err.message || 'Falha ao preparar próximo projeto.');
     } finally {
       setIsLoadingAction(false);
     }
@@ -432,7 +432,7 @@ export const AdminRoundPage: React.FC = () => {
                     <Layers className="w-6 h-6" />
                   </div>
                   <span className="text-xs font-bold uppercase tracking-widest text-gray-300">
-                    Banner Oficial 16:9
+                    Banner Oficial
                   </span>
                 </div>
               )}

@@ -107,7 +107,7 @@ export const AdminSettingsPage: React.FC = () => {
       setTimeout(() => setSaveSuccess(false), 4000);
     } catch (err: any) {
       console.error('Falha ao salvar configurações:', err);
-      setErrorMessage(err.message || 'Falha ao salvar configurações no Supabase.');
+      setErrorMessage(err.message || 'Falha ao salvar configurações.');
     } finally {
       setIsSaving(false);
     }
@@ -133,7 +133,7 @@ export const AdminSettingsPage: React.FC = () => {
         {saveSuccess && (
           <div className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-arena-green/20 text-arena-green border border-arena-green/40 text-xs font-bold shadow-green-glow animate-fade-in">
             <Check className="w-4 h-4" />
-            <span>Configurações e ordem salvas no Supabase!</span>
+            <span>Configurações e ordem salvas!</span>
           </div>
         )}
       </div>

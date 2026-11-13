@@ -371,7 +371,7 @@ export const AdminProjectsPage: React.FC = () => {
           <div className="space-y-1 max-w-md">
             <h3 className="text-lg font-black text-white">Nenhum projeto cadastrado</h3>
             <p className="text-xs text-gray-400 leading-relaxed">
-              O banco de dados não possui nenhum projeto cadastrado para este evento. Cadastre o primeiro projeto oficial para iniciar a avaliação popular.
+              O sistema não possui nenhum projeto cadastrado para este evento. Cadastre o primeiro projeto oficial para iniciar a avaliação popular.
             </p>
           </div>
           <AdminActionButton
@@ -401,7 +401,7 @@ export const AdminProjectsPage: React.FC = () => {
               )}
             </div>
             <div className="text-[11px] text-gray-400 mt-0.5">
-              Ao clicar, o servidor abrirá a rodada oficial no Supabase e os celulares do público entrarão em modo de votação em tempo real.
+              Ao clicar, o sistema abrirá a rodada oficial e os celulares do público entrarão em modo de votação em tempo real.
             </div>
           </div>
 
@@ -413,7 +413,7 @@ export const AdminProjectsPage: React.FC = () => {
             icon={<Play className="w-5 h-5 fill-current" />}
             className="w-full sm:w-auto py-3.5 px-8 text-sm"
           >
-            {isOpening ? 'ABRINDO RODADA NO SERVIDOR...' : 'LIBERAR VOTAÇÃO'}
+            {isOpening ? 'ABRINDO RODADA...' : 'LIBERAR VOTAÇÃO'}
           </AdminActionButton>
         </div>
       )}
@@ -457,7 +457,7 @@ export const AdminProjectsPage: React.FC = () => {
 
                 {deleteModalState.isChecking ? (
                   <p className="text-xs text-gray-400">
-                    Consultando histórico de votos e rodadas no Supabase...
+                    Consultando histórico de votos e rodadas...
                   </p>
                 ) : deleteModalState.history?.hasHistory ? (
                   <div className="space-y-2 text-xs text-gray-300">
@@ -479,7 +479,7 @@ export const AdminProjectsPage: React.FC = () => {
                     <strong className="text-white">{deleteModalState.project?.nome}</strong>?
                     <br />
                     <span className="text-[11px] text-gray-400 mt-1 block">
-                      Este projeto não possui votos nem rodadas vinculadas e será removido definitivamente do Supabase.
+                      Este projeto não possui votos nem rodadas vinculadas e será removido definitivamente.
                     </span>
                   </p>
                 )}

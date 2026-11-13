@@ -1,69 +1,454 @@
--- ==============================================================================
--- ARENA VOICE — ETAPA 2: CONTROLE DE ACESSO, RBAC E SEGURANÇA AVANÇADA (FINAL)
--- ==============================================================================
--- STATUS: NÃO EXECUTADO — AGUARDANDO AUTORIZAÇÃO EXPRESSA DO USUÁRIO
+-- =============================================================================
+-- ARENA VOICE — ETAPA 2
+-- CONTROLE DE ACESSO, RBAC, ISOLAMENTO MULTI-EVENTO E SEGURANÇA
 --
--- EXECUÇÃO TOTALMENTE TRANSACIONAL:
--- Todo o script está envolvido em um bloco BEGIN ... COMMIT.
--- Em caso de qualquer inconsistência, o PostgreSQL desfaz automaticamente
--- todas as operações, garantindo que o banco nunca fique em estado parcial.
---
--- REGRAS E BLINDAGENS DESTE PATCH:
--- 1. SIGILO ABSOLUTO DO VOTO (public.votes):
---    - Eliminação dinâmica e irrestrita de TODAS as políticas legadas via pg_policies.
---    - Aplica "votes_select_strict_own": ESTRITAMENTE o próprio votante (voter_id = auth.uid()).
---    - NENHUM administrador (nem Superadmin) tem permissão de SELECT em votos individuais de terceiros.
---    - REVOKE ALL ON TABLE public.votes FROM public, anon, authenticated; GRANT SELECT TO authenticated.
---    - Votos são gravados EXCLUSIVAMENTE via public.submit_vote() (SECURITY DEFINER).
--- 2. SEGURANÇA DE RESULTADOS AGREGADOS (public.results):
---    - Eliminação dinâmica de políticas antigas.
---    - Admins autorizados consultam resultados em tempo real para condução do evento.
---    - Público/Telão só lê resultados se results_published = true OU contador durante rodada open do projeto.
---    - Sem exposição de dados pessoais ou identificadores de votantes.
--- 3. ISOLAMENTO MULTI-EVENTO (public.events, projects, rounds):
---    - Cria public.event_admins e índices de performance compostos.
---    - Admin só lê e opera eventos, projetos e rodadas aos quais foi explicitamente vinculado.
---    - Superadmin mantém acesso global administrativo.
--- 4. PROCEDURES ATÔMICAS E BLINDADAS:
---    - open_round, prepare_next_round, get_admin_results, reconcile_results com has_event_access().
---    - close_round corrigida: valida existência, pertinência e status 'open' da rodada, limpando
---      events.current_round_id SOMENTE se correspondia à rodada encerrada.
---    - submit_vote validada: concorrência via lock compartilhado na rodada, lock exclusivo de linha
---      em results, chave determinística única e bloqueio de notas fora de [1..5].
---    - Todas com SECURITY DEFINER SET search_path = public, pg_temp e revogação explícita de EXECUTE para public.
--- 5. PRESERVAÇÃO INTEGRAL:
---    - Nenhuma tabela é dropada. Nenhum dado histórico de arena-voice-2026 é alterado ou excluído.
--- ==============================================================================
+-- DIRETRIZES FUNDAMENTAIS:
+-- 1. Este script é transacional (BEGIN / COMMIT). Se qualquer validação falhar,
+--    nenhuma modificação persistirá.
+-- 2. Não apaga projetos, votos históricos, rodadas ou resultados existentes.
+-- 3. Garante o sigilo do voto: administradores NÃO possuem permissão de SELECT
+--    direto na tabela public.votes. O acesso a resultados se dá exclusivamente
+--    por consolidação matemática agregada (public.results e get_admin_results).
+-- 4. O gerenciamento de perfis administrativos é protegido e restrito ao superadmin.
+-- 5. Atualização atômica do cache de esquema do PostgREST ao final via NOTIFY.
+-- =============================================================================
 
 BEGIN;
 
--- ------------------------------------------------------------------------------
--- 1. TABELA DE RELACIONAMENTO: public.event_admins
--- ------------------------------------------------------------------------------
+-- =============================================================================
+-- 0. CRIAÇÃO DA FUNÇÃO ADMINISTRATIVA DE GESTÃO DE PERFIS (admin_manage_profile)
+-- =============================================================================
+
+-- Implementação segura requerida pelo frontend (src/services/adminUsersService.ts).
+-- Permite que superadministradores gerenciem perfis em public.admin_profiles
+-- com regras estritas de proteção e sem manipulação indevida de auth.users.
+
+CREATE OR REPLACE FUNCTION public.admin_manage_profile(
+  p_action text,
+  p_user_id uuid,
+  p_name text DEFAULT NULL,
+  p_email text DEFAULT NULL,
+  p_role text DEFAULT 'operator',
+  p_active boolean DEFAULT true
+)
+RETURNS json
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+DECLARE
+  v_caller_id uuid;
+  v_caller_role text;
+  v_caller_active boolean;
+  v_target_profile record;
+  v_superadmin_count integer;
+  v_final_active boolean;
+  v_final_role text;
+BEGIN
+  -- 1. Validação de autenticação da sessão do usuário chamador
+  v_caller_id := auth.uid();
+  IF v_caller_id IS NULL THEN
+    RAISE EXCEPTION 'Acesso negado: sessão inválida ou não autenticada.'
+      USING ERRCODE = '42501';
+  END IF;
+
+  -- 2. Validação de perfil administrativo do chamador: estritamente superadmin ativo
+  SELECT role, active
+  INTO v_caller_role, v_caller_active
+  FROM public.admin_profiles
+  WHERE id = v_caller_id;
+
+  IF NOT FOUND OR v_caller_active IS DISTINCT FROM true OR v_caller_role <> 'superadmin' THEN
+    RAISE EXCEPTION 'Acesso negado: apenas superadministradores ativos possuem permissão para gerenciar perfis.'
+      USING ERRCODE = '42501';
+  END IF;
+
+  -- 3. Validação dos parâmetros obrigatórios de entrada
+  IF p_action IS NULL OR trim(p_action) = '' THEN
+    RAISE EXCEPTION 'Parâmetro obrigatório ausente: p_action.'
+      USING ERRCODE = '22023';
+  END IF;
+
+  IF p_user_id IS NULL THEN
+    RAISE EXCEPTION 'Parâmetro obrigatório ausente: p_user_id.'
+      USING ERRCODE = '22023';
+  END IF;
+
+  IF p_role IS NOT NULL AND p_role NOT IN ('superadmin', 'admin', 'operator') THEN
+    RAISE EXCEPTION 'Papel de acesso inválido: %. Valores aceitos: superadmin, admin ou operator.', p_role
+      USING ERRCODE = '22023';
+  END IF;
+
+  -- 4. Busca o registro atual do perfil alvo (se existir)
+  SELECT *
+  INTO v_target_profile
+  FROM public.admin_profiles
+  WHERE id = p_user_id;
+
+  -- 5. Regras de salvaguarda do superadministrador e proteção do último superadmin ativo
+  IF FOUND AND v_target_profile.role = 'superadmin' AND v_target_profile.active = true THEN
+    -- Determina o estado final pretendido para ativação e papel
+    v_final_active := CASE
+      WHEN p_action = 'delete' THEN false
+      WHEN p_action = 'toggle_active' THEN COALESCE(p_active, NOT v_target_profile.active)
+      WHEN p_action = 'set_active' THEN COALESCE(p_active, false)
+      WHEN p_action IN ('create', 'upsert', 'update') AND p_active IS NOT NULL THEN p_active
+      ELSE v_target_profile.active
+    END;
+
+    v_final_role := CASE
+      WHEN p_action IN ('create', 'upsert', 'update') AND p_role IS NOT NULL THEN p_role
+      ELSE v_target_profile.role
+    END;
+
+    -- Se a operação resultar na perda do status de superadmin ativo para este usuário:
+    IF v_final_active = false OR v_final_role <> 'superadmin' THEN
+      SELECT count(*)
+      INTO v_superadmin_count
+      FROM public.admin_profiles
+      WHERE role = 'superadmin'
+        AND active = true;
+
+      IF v_superadmin_count <= 1 THEN
+        RAISE EXCEPTION 'Operação bloqueada: não é permitido desativar, rebaixar ou excluir o único superadministrador ativo do sistema.'
+          USING ERRCODE = '23514';
+      END IF;
+    END IF;
+  END IF;
+
+  -- 6. Execução atômica da ação solicitada
+  IF p_action IN ('create', 'upsert') THEN
+    -- Para cadastro inicial, valida existência da identidade na tabela de autenticação
+    IF NOT EXISTS (SELECT 1 FROM auth.users WHERE id = p_user_id) THEN
+      RAISE EXCEPTION 'Usuário % não encontrado no catálogo de autenticação (auth.users). Crie a conta antes de conceder perfil administrativo.', p_user_id
+        USING ERRCODE = 'P0002';
+    END IF;
+
+    IF (p_name IS NULL OR trim(p_name) = '') AND v_target_profile.name IS NULL THEN
+      RAISE EXCEPTION 'O nome do administrador é obrigatório para cadastro.'
+        USING ERRCODE = '22023';
+    END IF;
+
+    IF (p_email IS NULL OR trim(p_email) = '') AND v_target_profile.email IS NULL THEN
+      RAISE EXCEPTION 'O e-mail do administrador é obrigatório para cadastro.'
+        USING ERRCODE = '22023';
+    END IF;
+
+    INSERT INTO public.admin_profiles (
+      id,
+      name,
+      email,
+      role,
+      active,
+      created_at,
+      updated_at
+    )
+    VALUES (
+      p_user_id,
+      trim(COALESCE(p_name, v_target_profile.name)),
+      lower(trim(COALESCE(p_email, v_target_profile.email))),
+      COALESCE(p_role, 'operator'),
+      COALESCE(p_active, true),
+      now(),
+      now()
+    )
+    ON CONFLICT (id) DO UPDATE SET
+      name = CASE WHEN p_name IS NOT NULL AND trim(p_name) <> '' THEN trim(p_name) ELSE public.admin_profiles.name END,
+      email = CASE WHEN p_email IS NOT NULL AND trim(p_email) <> '' THEN lower(trim(p_email)) ELSE public.admin_profiles.email END,
+      role = CASE WHEN p_role IS NOT NULL THEN p_role ELSE public.admin_profiles.role END,
+      active = CASE WHEN p_active IS NOT NULL THEN p_active ELSE public.admin_profiles.active END,
+      updated_at = now()
+    RETURNING * INTO v_target_profile;
+
+    RETURN json_build_object(
+      'success', true,
+      'action', p_action,
+      'id', v_target_profile.id,
+      'name', v_target_profile.name,
+      'email', v_target_profile.email,
+      'role', v_target_profile.role,
+      'active', v_target_profile.active,
+      'user', json_build_object(
+        'id', v_target_profile.id,
+        'name', v_target_profile.name,
+        'email', v_target_profile.email,
+        'role', v_target_profile.role,
+        'active', v_target_profile.active,
+        'created_at', v_target_profile.created_at,
+        'updated_at', v_target_profile.updated_at
+      )
+    );
+
+  ELSIF p_action = 'update' THEN
+    IF v_target_profile.id IS NULL THEN
+      RAISE EXCEPTION 'Perfil administrativo % não encontrado para atualização.', p_user_id
+        USING ERRCODE = 'P0002';
+    END IF;
+
+    UPDATE public.admin_profiles
+    SET name = CASE WHEN p_name IS NOT NULL AND trim(p_name) <> '' THEN trim(p_name) ELSE public.admin_profiles.name END,
+        email = CASE WHEN p_email IS NOT NULL AND trim(p_email) <> '' THEN lower(trim(p_email)) ELSE public.admin_profiles.email END,
+        role = CASE WHEN p_role IS NOT NULL THEN p_role ELSE public.admin_profiles.role END,
+        active = CASE WHEN p_active IS NOT NULL THEN p_active ELSE public.admin_profiles.active END,
+        updated_at = now()
+    WHERE id = p_user_id
+    RETURNING * INTO v_target_profile;
+
+    RETURN json_build_object(
+      'success', true,
+      'action', 'update',
+      'id', v_target_profile.id,
+      'name', v_target_profile.name,
+      'email', v_target_profile.email,
+      'role', v_target_profile.role,
+      'active', v_target_profile.active,
+      'user', json_build_object(
+        'id', v_target_profile.id,
+        'name', v_target_profile.name,
+        'email', v_target_profile.email,
+        'role', v_target_profile.role,
+        'active', v_target_profile.active,
+        'created_at', v_target_profile.created_at,
+        'updated_at', v_target_profile.updated_at
+      )
+    );
+
+  ELSIF p_action = 'toggle_active' THEN
+    IF v_target_profile.id IS NULL THEN
+      RAISE EXCEPTION 'Perfil administrativo % não encontrado para alteração de status.', p_user_id
+        USING ERRCODE = 'P0002';
+    END IF;
+
+    UPDATE public.admin_profiles
+    SET active = COALESCE(p_active, NOT active),
+        updated_at = now()
+    WHERE id = p_user_id
+    RETURNING * INTO v_target_profile;
+
+    RETURN json_build_object(
+      'success', true,
+      'action', 'toggle_active',
+      'id', v_target_profile.id,
+      'active', v_target_profile.active
+    );
+
+  ELSIF p_action = 'set_active' THEN
+    IF v_target_profile.id IS NULL THEN
+      RAISE EXCEPTION 'Perfil administrativo % não encontrado para alteração de status.', p_user_id
+        USING ERRCODE = 'P0002';
+    END IF;
+
+    UPDATE public.admin_profiles
+    SET active = COALESCE(p_active, false),
+        updated_at = now()
+    WHERE id = p_user_id
+    RETURNING * INTO v_target_profile;
+
+    RETURN json_build_object(
+      'success', true,
+      'action', 'set_active',
+      'id', v_target_profile.id,
+      'active', v_target_profile.active
+    );
+
+  ELSIF p_action = 'delete' THEN
+    IF v_target_profile.id IS NULL THEN
+      RAISE EXCEPTION 'Perfil administrativo % não encontrado para exclusão.', p_user_id
+        USING ERRCODE = 'P0002';
+    END IF;
+
+    -- Limpa registros em event_admins antes de excluir o perfil administrativo
+    DELETE FROM public.event_admins
+    WHERE user_id = p_user_id;
+
+    -- Remove o perfil administrativo (preserva a credencial em auth.users intacta)
+    DELETE FROM public.admin_profiles
+    WHERE id = p_user_id;
+
+    RETURN json_build_object(
+      'success', true,
+      'action', 'delete',
+      'deleted_id', p_user_id
+    );
+
+  ELSE
+    RAISE EXCEPTION 'Ação desconhecida: %. Utilize create, upsert, update, toggle_active, set_active ou delete.', p_action
+      USING ERRCODE = '22023';
+  END IF;
+END;
+$$;
+
+-- =============================================================================
+-- 0.1 PRÉ-VALIDAÇÃO DO BANCO DE DADOS
+-- =============================================================================
+
+DO $$
+DECLARE
+  v_missing text;
+  v_fn regprocedure;
+  v_owner_ok boolean;
+  v_path_ok boolean;
+  v_required_columns text[] := ARRAY[
+    'events.id',
+    'events.status',
+    'events.current_round_id',
+    'events.current_project_id',
+    'events.results_published',
+    'projects.id',
+    'projects.event_id',
+    'projects.active',
+    'projects.order',
+    'projects.name',
+    'projects.category',
+    'projects.banner_url',
+    'rounds.id',
+    'rounds.event_id',
+    'rounds.project_id',
+    'rounds.status',
+    'rounds.started_at',
+    'rounds.released_at',
+    'rounds.ended_at',
+    'rounds.closed_at',
+    'rounds.updated_at',
+    'votes.id',
+    'votes.event_id',
+    'votes.project_id',
+    'votes.round_id',
+    'votes.voter_id',
+    'votes.innovation_score',
+    'votes.cptm_impact_score',
+    'votes.development_score',
+    'votes.innovation',
+    'votes.impact',
+    'votes.development',
+    'results.id',
+    'results.event_id',
+    'results.project_id',
+    'results.total_votes',
+    'results.sum_innovation',
+    'results.sum_impact',
+    'results.sum_development',
+    'results.average_innovation',
+    'results.average_impact',
+    'results.average_development',
+    'results.average_general',
+    'results.percentage',
+    'results.popular_points',
+    'results.updated_at',
+    'admin_profiles.id',
+    'admin_profiles.active',
+    'admin_profiles.role'
+  ];
+  v_col text;
+BEGIN
+  -- 1. Verifica existência de todas as colunas obrigatórias
+  FOREACH v_col IN ARRAY v_required_columns LOOP
+    IF NOT EXISTS (
+      SELECT 1
+      FROM information_schema.columns
+      WHERE table_schema = 'public'
+        AND table_name = split_part(v_col, '.', 1)
+        AND column_name = split_part(v_col, '.', 2)
+    ) THEN
+      RAISE EXCEPTION
+        'PRÉ-VALIDAÇÃO FALHOU: coluna obrigatória ausente no banco de dados: %', v_col;
+    END IF;
+  END LOOP;
+
+  -- 2. Verifica funções essenciais do catálogo
+  IF to_regprocedure('public.is_admin()') IS NULL THEN
+    RAISE EXCEPTION 'Função public.is_admin() não encontrada no catálogo.';
+  END IF;
+
+  IF to_regprocedure('public.is_superadmin()') IS NULL THEN
+    RAISE EXCEPTION 'Função public.is_superadmin() não encontrada no catálogo.';
+  END IF;
+
+  IF to_regprocedure(
+    'public.admin_manage_profile(text,uuid,text,text,text,boolean)'
+  ) IS NULL THEN
+    RAISE EXCEPTION
+      'Função public.admin_manage_profile(text,uuid,text,text,text,boolean) não encontrada no catálogo.';
+  END IF;
+
+  -- 3. Confirma que as funções privilegiadas pertencem a papel com BYPASSRLS/SUPERUSER
+  --    e utilizam search_path normalizado: public, pg_temp
+  FOREACH v_fn IN ARRAY ARRAY[
+    to_regprocedure('public.is_admin()'),
+    to_regprocedure('public.is_superadmin()'),
+    to_regprocedure(
+      'public.admin_manage_profile(text,uuid,text,text,text,boolean)'
+    )
+  ] LOOP
+    SELECT
+      (r.rolsuper OR r.rolbypassrls),
+      EXISTS (
+        SELECT 1
+        FROM unnest(COALESCE(p.proconfig, ARRAY[]::text[])) AS cfg
+        WHERE replace(cfg, ' ', '') = 'search_path=public,pg_temp'
+      )
+    INTO v_owner_ok, v_path_ok
+    FROM pg_proc p
+    JOIN pg_roles r ON r.oid = p.proowner
+    WHERE p.oid = v_fn;
+
+    IF NOT COALESCE(v_owner_ok, false) THEN
+      RAISE EXCEPTION
+        'A função % não pertence a um proprietário com BYPASSRLS ou SUPERUSER.',
+        v_fn;
+    END IF;
+
+    IF NOT COALESCE(v_path_ok, false) THEN
+      RAISE EXCEPTION
+        'A função % não possui search_path seguro (public, pg_temp).',
+        v_fn;
+    END IF;
+  END LOOP;
+
+  RAISE NOTICE 'Pré-validação estrutural concluída com sucesso.';
+END;
+$$;
+
+-- =============================================================================
+-- 1. TABELA DE VÍNCULO ENTRE ADMINISTRADORES E EVENTOS (public.event_admins)
+-- =============================================================================
+
 CREATE TABLE IF NOT EXISTS public.event_admins (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  event_id text NOT NULL REFERENCES public.events(id) ON DELETE CASCADE,
-  user_id uuid NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
-  granted_by uuid REFERENCES auth.users(id) ON DELETE SET NULL,
+  event_id text NOT NULL
+    REFERENCES public.events(id) ON DELETE CASCADE,
+  user_id uuid NOT NULL
+    REFERENCES auth.users(id) ON DELETE CASCADE,
+  granted_by uuid
+    REFERENCES auth.users(id) ON DELETE SET NULL,
   created_at timestamptz NOT NULL DEFAULT now(),
   CONSTRAINT uq_event_admins_event_user UNIQUE (event_id, user_id)
 );
 
-COMMENT ON TABLE public.event_admins IS 'Mapeamento de autorizações: vincula administradores e operadores a eventos específicos';
-COMMENT ON COLUMN public.event_admins.event_id IS 'ID do evento autorizado';
-COMMENT ON COLUMN public.event_admins.user_id IS 'ID do usuário autorizado em auth.users';
-COMMENT ON COLUMN public.event_admins.granted_by IS 'ID do Superadmin que concedeu a permissão';
+COMMENT ON TABLE public.event_admins IS
+  'Vínculo de autorização entre administradores e eventos.';
 
--- ------------------------------------------------------------------------------
--- 2. ÍNDICES DE PERFORMANCE
--- ------------------------------------------------------------------------------
-CREATE INDEX IF NOT EXISTS idx_event_admins_user_id ON public.event_admins(user_id);
-CREATE INDEX IF NOT EXISTS idx_event_admins_event_id ON public.event_admins(event_id);
-CREATE INDEX IF NOT EXISTS idx_event_admins_composite ON public.event_admins(user_id, event_id);
+CREATE INDEX IF NOT EXISTS idx_event_admins_user_id
+  ON public.event_admins(user_id);
 
--- ------------------------------------------------------------------------------
--- 3. FUNÇÃO DE VERIFICAÇÃO ATÔMICA DE ACESSO: public.has_event_access(p_event_id text)
--- ------------------------------------------------------------------------------
+CREATE INDEX IF NOT EXISTS idx_event_admins_event_id
+  ON public.event_admins(event_id);
+
+CREATE INDEX IF NOT EXISTS idx_event_admins_composite
+  ON public.event_admins(user_id, event_id);
+
+-- =============================================================================
+-- 2. GARANTIA DE VOTO ÚNICO POR EVENTO, PROJETO E PARTICIPANTE
+-- =============================================================================
+
+CREATE UNIQUE INDEX IF NOT EXISTS ux_votes_event_project_voter
+ON public.votes(event_id, project_id, voter_id);
+
+-- =============================================================================
+-- 3. FUNÇÃO DE VERIFICAÇÃO DE ACESSO AO EVENTO (has_event_access)
+-- =============================================================================
+
+-- Sobrecarga 1: consulta para a sessão atual (auth.uid())
 CREATE OR REPLACE FUNCTION public.has_event_access(p_event_id text)
 RETURNS boolean
 LANGUAGE sql
@@ -71,28 +456,59 @@ STABLE
 SECURITY DEFINER
 SET search_path = public, pg_temp
 AS $$
-  SELECT EXISTS (
-    -- 1. Superadmin possui acesso global irrestrito a todos os eventos
-    SELECT 1 FROM public.admin_profiles
-    WHERE id = auth.uid()
-      AND active = true
-      AND role = 'superadmin'
-  )
-  OR EXISTS (
-    -- 2. Admin ou Operador vinculado diretamente ao evento em public.event_admins
-    SELECT 1 FROM public.event_admins ea
-    JOIN public.admin_profiles ap ON ap.id = ea.user_id
-    WHERE ea.event_id = p_event_id
-      AND ea.user_id = auth.uid()
-      AND ap.active = true
-  );
+  SELECT
+    EXISTS (
+      SELECT 1
+      FROM public.admin_profiles ap
+      WHERE ap.id = auth.uid()
+        AND ap.active = true
+        AND ap.role = 'superadmin'
+    )
+    OR EXISTS (
+      SELECT 1
+      FROM public.event_admins ea
+      JOIN public.admin_profiles ap
+        ON ap.id = ea.user_id
+      WHERE ea.event_id = p_event_id
+        AND ea.user_id = auth.uid()
+        AND ap.active = true
+    );
 $$;
 
--- ------------------------------------------------------------------------------
--- 4. PROCEDURES ATÔMICAS DE CONCESSÃO E REVOGAÇÃO (APENAS SUPERADMIN)
--- ------------------------------------------------------------------------------
+-- Sobrecarga 2: consulta para um usuário específico (p_user_id)
+CREATE OR REPLACE FUNCTION public.has_event_access(
+  p_event_id text,
+  p_user_id uuid
+)
+RETURNS boolean
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+  SELECT
+    EXISTS (
+      SELECT 1
+      FROM public.admin_profiles ap
+      WHERE ap.id = p_user_id
+        AND ap.active = true
+        AND ap.role = 'superadmin'
+    )
+    OR EXISTS (
+      SELECT 1
+      FROM public.event_admins ea
+      JOIN public.admin_profiles ap
+        ON ap.id = ea.user_id
+      WHERE ea.event_id = p_event_id
+        AND ea.user_id = p_user_id
+        AND ap.active = true
+    );
+$$;
 
--- 4.1 public.grant_event_access
+-- =============================================================================
+-- 4. CONCESSÃO E REVOGAÇÃO DE ACESSO A EVENTOS
+-- =============================================================================
+
 CREATE OR REPLACE FUNCTION public.grant_event_access(
   p_event_id text,
   p_user_id uuid
@@ -102,48 +518,59 @@ LANGUAGE plpgsql
 SECURITY DEFINER
 SET search_path = public, pg_temp
 AS $$
-declare
-  v_event_exists boolean;
-  v_user_profile record;
+DECLARE
   v_assignment_id uuid;
-begin
-  -- Valida se quem chamou é superadmin ativo
-  if not public.is_superadmin() then
-    raise exception 'Acesso negado: Apenas superadministradores podem conceder acesso a eventos.';
-  end if;
+  v_active boolean;
+BEGIN
+  IF NOT public.is_superadmin() THEN
+    RAISE EXCEPTION 'Somente superadministradores podem conceder acesso.'
+      USING ERRCODE = '42501';
+  END IF;
 
-  -- Valida existência do evento
-  select exists(select 1 from public.events where id = p_event_id) into v_event_exists;
-  if not v_event_exists then
-    raise exception 'Evento "%" não encontrado.', p_event_id;
-  end if;
+  -- Serializa a alteração de permissões adquirindo lock do evento
+  PERFORM 1
+  FROM public.events
+  WHERE id = p_event_id
+  FOR UPDATE;
 
-  -- Valida se o usuário existe em admin_profiles e se está ativo
-  select * into v_user_profile from public.admin_profiles where id = p_user_id;
-  if not found then
-    raise exception 'Administrador não encontrado no cadastro de perfis.';
-  end if;
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Evento % não encontrado.', p_event_id
+      USING ERRCODE = 'P0002';
+  END IF;
 
-  if not v_user_profile.active then
-    raise exception 'Não é permitido vincular eventos a um administrador inativo.';
-  end if;
+  SELECT active
+  INTO v_active
+  FROM public.admin_profiles
+  WHERE id = p_user_id;
 
-  -- Insere o relacionamento de forma idempotente
-  insert into public.event_admins (event_id, user_id, granted_by, created_at)
-  values (p_event_id, p_user_id, auth.uid(), now())
-  on conflict (event_id, user_id) do nothing
-  returning id into v_assignment_id;
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Administrador não encontrado.'
+      USING ERRCODE = 'P0002';
+  END IF;
 
-  return json_build_object(
+  IF v_active IS DISTINCT FROM true THEN
+    RAISE EXCEPTION 'Não é permitido vincular um administrador inativo.'
+      USING ERRCODE = '23514';
+  END IF;
+
+  INSERT INTO public.event_admins (
+    event_id, user_id, granted_by
+  )
+  VALUES (
+    p_event_id, p_user_id, auth.uid()
+  )
+  ON CONFLICT (event_id, user_id) DO NOTHING
+  RETURNING id INTO v_assignment_id;
+
+  RETURN json_build_object(
     'success', true,
     'event_id', p_event_id,
     'user_id', p_user_id,
-    'assignment_id', coalesce(v_assignment_id::text, 'already_granted')
+    'assignment_id', COALESCE(v_assignment_id::text, 'already_granted')
   );
-end;
+END;
 $$;
 
--- 4.2 public.revoke_event_access
 CREATE OR REPLACE FUNCTION public.revoke_event_access(
   p_event_id text,
   p_user_id uuid
@@ -153,293 +580,517 @@ LANGUAGE plpgsql
 SECURITY DEFINER
 SET search_path = public, pg_temp
 AS $$
-declare
-  v_remaining_admins int;
-begin
-  -- Valida se quem chamou é superadmin ativo
-  if not public.is_superadmin() then
-    raise exception 'Acesso negado: Apenas superadministradores podem revogar acesso a eventos.';
-  end if;
+DECLARE
+  v_remaining_admins integer;
+BEGIN
+  IF NOT public.is_superadmin() THEN
+    RAISE EXCEPTION 'Somente superadministradores podem revogar acesso.'
+      USING ERRCODE = '42501';
+  END IF;
 
-  -- Executa revogação
-  delete from public.event_admins
-  where event_id = p_event_id and user_id = p_user_id;
+  PERFORM 1
+  FROM public.events
+  WHERE id = p_event_id
+  FOR UPDATE;
 
-  -- Checa se o evento ficou sem administrador atribuído
-  select count(*) into v_remaining_admins
-  from public.event_admins
-  where event_id = p_event_id;
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Evento % não encontrado.', p_event_id
+      USING ERRCODE = 'P0002';
+  END IF;
 
-  return json_build_object(
+  DELETE FROM public.event_admins
+  WHERE event_id = p_event_id
+    AND user_id = p_user_id;
+
+  SELECT count(*)
+  INTO v_remaining_admins
+  FROM public.event_admins
+  WHERE event_id = p_event_id;
+
+  RETURN json_build_object(
     'success', true,
     'event_id', p_event_id,
     'user_id', p_user_id,
     'remaining_admins', v_remaining_admins,
     'will_orphan_event', (v_remaining_admins = 0)
   );
-end;
+END;
 $$;
 
--- ------------------------------------------------------------------------------
--- 5. PROCEDURES OPERACIONAIS DE RODADAS COM CONTROLE DE ACESSO POR EVENTO
--- ------------------------------------------------------------------------------
+-- =============================================================================
+-- 5. ABERTURA DE RODADA (open_round)
+-- =============================================================================
 
--- 5.1 open_round com verificação has_event_access
 CREATE OR REPLACE FUNCTION public.open_round(
   p_event_id text,
   p_project_id text
-) RETURNS json
+)
+RETURNS json
 LANGUAGE plpgsql
 SECURITY DEFINER
 SET search_path = public, pg_temp
 AS $$
-declare
+DECLARE
+  v_event record;
+  v_project record;
   v_new_round_id uuid;
-  v_proj record;
-  v_event record;
-begin
-  if not public.has_event_access(p_event_id) then
-    raise exception 'Acesso negado: Você não possui permissão para administrar este evento.';
-  end if;
+BEGIN
+  SELECT *
+  INTO v_event
+  FROM public.events
+  WHERE id = p_event_id
+  FOR UPDATE;
 
-  select * into v_event from public.events where id = p_event_id for update;
-  if not found then
-    raise exception 'Evento % não encontrado.', p_event_id;
-  end if;
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Evento não encontrado.' USING ERRCODE = 'P0002';
+  END IF;
 
-  select * into v_proj from public.projects where id = p_project_id and event_id = p_event_id for share;
-  if not found or not v_proj.active then
-    raise exception 'Projeto % inexistente, inativo ou pertencente a outro evento.', p_project_id;
-  end if;
+  IF NOT public.has_event_access(p_event_id) THEN
+    RAISE EXCEPTION 'Você não possui acesso administrativo a este evento.'
+      USING ERRCODE = '42501';
+  END IF;
 
-  -- Encerra rodadas abertas anteriores do evento
-  update public.rounds
-  set status = 'closed', ended_at = now(), closed_at = now(), updated_at = now()
-  where event_id = p_event_id and status = 'open';
+  IF v_event.status <> 'active' THEN
+    RAISE EXCEPTION 'Não é permitido abrir rodadas em eventos que não estejam ativos.'
+      USING ERRCODE = '23514';
+  END IF;
 
-  -- Cria nova rodada aberta
-  insert into public.rounds (event_id, project_id, status, started_at, released_at)
-  values (p_event_id, p_project_id, 'open', now(), now())
-  returning id into v_new_round_id;
+  SELECT *
+  INTO v_project
+  FROM public.projects
+  WHERE id = p_project_id
+    AND event_id = p_event_id
+  FOR SHARE;
 
-  -- Atualiza ponteiros do evento
-  update public.events
-  set current_round_id = v_new_round_id, current_project_id = p_project_id, updated_at = now()
-  where id = p_event_id;
+  IF NOT FOUND OR v_project.active IS DISTINCT FROM true THEN
+    RAISE EXCEPTION 'Projeto inexistente, inativo ou pertencente a outro evento.'
+      USING ERRCODE = '23514';
+  END IF;
 
-  return json_build_object('success', true, 'round_id', v_new_round_id);
-end;
-$$;
-
--- 5.2 close_round com verificação has_event_access e validações estritas
-CREATE OR REPLACE FUNCTION public.close_round(
-  p_event_id text,
-  p_round_id uuid default null
-) RETURNS json
-LANGUAGE plpgsql
-SECURITY DEFINER
-SET search_path = public, pg_temp
-AS $$
-declare
-  v_event record;
-  v_round record;
-  v_target_round_id uuid;
-  v_closed_round_id uuid;
-begin
-  -- 1. Verificação prévia de autorização do administrador no evento
-  if not public.has_event_access(p_event_id) then
-    raise exception 'Acesso negado: Você não possui permissão para administrar este evento.';
-  end if;
-
-  -- 2. Lock transacional no registro do evento
-  select * into v_event from public.events where id = p_event_id for update;
-  if not found then
-    raise exception 'Evento "%" não encontrado.', p_event_id;
-  end if;
-
-  -- 3. Identificação e validação rigorosa da rodada a encerrar
-  if p_round_id is not null then
-    -- 3.1 Se p_round_id informado: validar existência, pertinência e status
-    select * into v_round from public.rounds where id = p_round_id for update;
-    if not found then
-      raise exception 'Rodada "%" não encontrada.', p_round_id;
-    end if;
-
-    if v_round.event_id <> p_event_id then
-      raise exception 'A rodada "%" não pertence ao evento "%".', p_round_id, p_event_id;
-    end if;
-
-    if v_round.status <> 'open' then
-      raise exception 'A rodada "%" não pode ser encerrada pois não está aberta (status atual: "%").', p_round_id, v_round.status;
-    end if;
-
-    v_target_round_id := v_round.id;
-  else
-    -- 3.2 Se p_round_id não informado: localizar a rodada aberta do evento
-    select * into v_round from public.rounds
-    where event_id = p_event_id and status = 'open'
-    order by started_at desc limit 1
-    for update;
-
-    if not found then
-      raise exception 'Não há nenhuma rodada aberta para o evento "%".', p_event_id;
-    end if;
-
-    v_target_round_id := v_round.id;
-  end if;
-
-  -- 4. Encerramento atômico da rodada validada
-  update public.rounds
-  set status = 'closed',
+  -- Fecha com segurança qualquer rodada aberta previamente neste evento
+  UPDATE public.rounds
+  SET status = 'closed',
       ended_at = now(),
       closed_at = now(),
       updated_at = now()
-  where id = v_target_round_id
-  returning id into v_closed_round_id;
+  WHERE event_id = p_event_id
+    AND status = 'open';
 
-  if v_closed_round_id is null then
-    raise exception 'Falha ao encerrar a rodada "%". Nenhuma linha foi atualizada.', v_target_round_id;
-  end if;
+  -- Cria a nova rodada aberta
+  INSERT INTO public.rounds (
+    event_id,
+    project_id,
+    status,
+    started_at,
+    released_at
+  )
+  VALUES (
+    p_event_id,
+    p_project_id,
+    'open',
+    now(),
+    now()
+  )
+  RETURNING id INTO v_new_round_id;
 
-  -- 5. Atualiza current_round_id no evento SOMENTE se correspondia à rodada encerrada
-  if v_event.current_round_id = v_closed_round_id then
-    update public.events
-    set current_round_id = null,
-        updated_at = now()
-    where id = p_event_id;
-  end if;
+  -- Atualiza os ponteiros vigentes do evento
+  UPDATE public.events
+  SET current_round_id = v_new_round_id,
+      current_project_id = p_project_id,
+      updated_at = now()
+  WHERE id = p_event_id;
 
-  return json_build_object(
+  RETURN json_build_object(
     'success', true,
-    'round_id', v_closed_round_id,
     'event_id', p_event_id,
+    'project_id', p_project_id,
+    'round_id', v_new_round_id,
+    'round', json_build_object(
+      'id', v_new_round_id,
+      'event_id', p_event_id,
+      'project_id', p_project_id,
+      'status', 'open',
+      'started_at', now()
+    )
+  );
+END;
+$$;
+
+-- =============================================================================
+-- 6. ENCERRAMENTO DE RODADA (close_round)
+-- =============================================================================
+
+CREATE OR REPLACE FUNCTION public.close_round(
+  p_event_id text,
+  p_round_id uuid DEFAULT NULL
+)
+RETURNS json
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+DECLARE
+  v_event record;
+  v_round record;
+  v_target_round_id uuid;
+BEGIN
+  SELECT *
+  INTO v_event
+  FROM public.events
+  WHERE id = p_event_id
+  FOR UPDATE;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Evento não encontrado.' USING ERRCODE = 'P0002';
+  END IF;
+
+  IF NOT public.has_event_access(p_event_id) THEN
+    RAISE EXCEPTION 'Acesso administrativo negado.' USING ERRCODE = '42501';
+  END IF;
+
+  IF p_round_id IS NOT NULL THEN
+    SELECT *
+    INTO v_round
+    FROM public.rounds
+    WHERE id = p_round_id
+    FOR UPDATE;
+
+    IF NOT FOUND THEN
+      RAISE EXCEPTION 'Rodada não encontrada.' USING ERRCODE = 'P0002';
+    END IF;
+
+    IF v_round.event_id <> p_event_id THEN
+      RAISE EXCEPTION 'A rodada informada não pertence a este evento.'
+        USING ERRCODE = '23514';
+    END IF;
+
+    IF v_round.status <> 'open' THEN
+      RAISE EXCEPTION 'A rodada informada não está aberta.'
+        USING ERRCODE = '23514';
+    END IF;
+
+    v_target_round_id := v_round.id;
+  ELSE
+    SELECT *
+    INTO v_round
+    FROM public.rounds
+    WHERE event_id = p_event_id
+      AND status = 'open'
+    ORDER BY started_at DESC
+    LIMIT 1
+    FOR UPDATE;
+
+    IF NOT FOUND THEN
+      RAISE EXCEPTION 'Não existe rodada aberta para este evento.'
+        USING ERRCODE = 'P0002';
+    END IF;
+
+    v_target_round_id := v_round.id;
+  END IF;
+
+  UPDATE public.rounds
+  SET status = 'closed',
+      ended_at = now(),
+      closed_at = now(),
+      updated_at = now()
+  WHERE id = v_target_round_id
+    AND event_id = p_event_id
+    AND status = 'open';
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Não foi possível encerrar a rodada.'
+      USING ERRCODE = 'P0002';
+  END IF;
+
+  -- Limpa o ponteiro current_round_id apenas se corresponder à rodada encerrada
+  UPDATE public.events
+  SET current_round_id = NULL,
+      updated_at = now()
+  WHERE id = p_event_id
+    AND current_round_id = v_target_round_id;
+
+  RETURN json_build_object(
+    'success', true,
+    'event_id', p_event_id,
+    'round_id', v_target_round_id,
     'closed_at', now()
   );
-end;
+END;
 $$;
 
--- 5.3 prepare_next_round com verificação has_event_access
+-- =============================================================================
+-- 7. PREPARAÇÃO DO PRÓXIMO PROJETO (prepare_next_round)
+-- =============================================================================
+
 CREATE OR REPLACE FUNCTION public.prepare_next_round(
   p_event_id text,
-  p_next_project_id text default null
-) RETURNS json
+  p_next_project_id text DEFAULT NULL
+)
+RETURNS json
 LANGUAGE plpgsql
 SECURITY DEFINER
 SET search_path = public, pg_temp
 AS $$
-declare
-  v_proj record;
-  v_current_proj_id text;
-  v_current_order int;
-begin
-  if not public.has_event_access(p_event_id) then
-    raise exception 'Acesso negado: Você não possui permissão para administrar este evento.';
-  end if;
+DECLARE
+  v_event record;
+  v_project record;
+  v_current_order integer;
+BEGIN
+  SELECT *
+  INTO v_event
+  FROM public.events
+  WHERE id = p_event_id
+  FOR UPDATE;
 
-  if p_next_project_id is not null and trim(p_next_project_id) <> '' then
-    select * into v_proj from public.projects
-    where id = p_next_project_id and event_id = p_event_id and active = true;
-  else
-    select current_project_id into v_current_proj_id from public.events where id = p_event_id;
-    if v_current_proj_id is not null then
-      select "order" into v_current_order from public.projects where id = v_current_proj_id and event_id = p_event_id;
-    end if;
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Evento não encontrado.' USING ERRCODE = 'P0002';
+  END IF;
 
-    select * into v_proj from public.projects
-    where event_id = p_event_id and active = true and ("order" > coalesce(v_current_order, 0))
-    order by "order" asc limit 1;
+  IF NOT public.has_event_access(p_event_id) THEN
+    RAISE EXCEPTION 'Acesso administrativo negado.' USING ERRCODE = '42501';
+  END IF;
 
-    if not found then
-      select * into v_proj from public.projects
-      where event_id = p_event_id and active = true
-      order by "order" asc limit 1;
-    end if;
-  end if;
+  IF v_event.status <> 'active' THEN
+    RAISE EXCEPTION 'Não é permitido preparar projetos em eventos não ativos.'
+      USING ERRCODE = '23514';
+  END IF;
 
-  if not found or not v_proj.active then
-    raise exception 'Nenhum projeto ativo disponível para a próxima rodada.';
-  end if;
+  IF p_next_project_id IS NOT NULL AND trim(p_next_project_id) <> '' THEN
+    SELECT *
+    INTO v_project
+    FROM public.projects
+    WHERE id = p_next_project_id
+      AND event_id = p_event_id
+      AND active = true
+    FOR SHARE;
 
-  update public.rounds
-  set status = 'closed', ended_at = now(), closed_at = now(), updated_at = now()
-  where event_id = p_event_id and status = 'open';
+    IF NOT FOUND THEN
+      RAISE EXCEPTION 'Projeto não encontrado, inativo ou pertencente a outro evento.'
+        USING ERRCODE = '23514';
+    END IF;
+  ELSE
+    IF v_event.current_project_id IS NOT NULL THEN
+      SELECT "order"
+      INTO v_current_order
+      FROM public.projects
+      WHERE id = v_event.current_project_id
+        AND event_id = p_event_id;
+    END IF;
 
-  update public.events
-  set current_round_id = null, current_project_id = v_proj.id, updated_at = now()
-  where id = p_event_id;
+    SELECT *
+    INTO v_project
+    FROM public.projects
+    WHERE event_id = p_event_id
+      AND active = true
+      AND "order" > COALESCE(v_current_order, 0)
+    ORDER BY "order" ASC
+    LIMIT 1
+    FOR SHARE;
 
-  return json_build_object('success', true, 'project_id', v_proj.id);
-end;
+    IF NOT FOUND THEN
+      SELECT *
+      INTO v_project
+      FROM public.projects
+      WHERE event_id = p_event_id
+        AND active = true
+      ORDER BY "order" ASC
+      LIMIT 1
+      FOR SHARE;
+    END IF;
+
+    IF NOT FOUND THEN
+      RAISE EXCEPTION 'Nenhum projeto ativo disponível para preparação.'
+        USING ERRCODE = 'P0002';
+    END IF;
+  END IF;
+
+  -- Fecha qualquer rodada aberta existente
+  UPDATE public.rounds
+  SET status = 'closed',
+      ended_at = now(),
+      closed_at = now(),
+      updated_at = now()
+  WHERE event_id = p_event_id
+    AND status = 'open';
+
+  -- Atualiza o evento: define o projeto atual e zera a rodada (estado waiting)
+  UPDATE public.events
+  SET current_round_id = NULL,
+      current_project_id = v_project.id,
+      updated_at = now()
+  WHERE id = p_event_id;
+
+  RETURN json_build_object(
+    'success', true,
+    'event_id', p_event_id,
+    'project_id', v_project.id,
+    'status', 'waiting'
+  );
+END;
 $$;
 
--- 5.4 get_admin_results com verificação has_event_access
+-- =============================================================================
+-- 8. CONSULTA ADMINISTRATIVA DE RESULTADOS (get_admin_results)
+-- =============================================================================
+
 CREATE OR REPLACE FUNCTION public.get_admin_results(
   p_event_id text
-) RETURNS json
+)
+RETURNS json
 LANGUAGE plpgsql
 SECURITY DEFINER
 SET search_path = public, pg_temp
 AS $$
-declare
+DECLARE
   v_results json;
-begin
-  if not (public.is_admin() and public.has_event_access(p_event_id)) then
-    raise exception 'Acesso negado: Você não possui autorização para consultar os resultados deste evento.';
-  end if;
+BEGIN
+  IF NOT (
+    public.is_admin()
+    AND public.has_event_access(p_event_id)
+  ) THEN
+    RAISE EXCEPTION 'Acesso negado aos resultados deste evento.'
+      USING ERRCODE = '42501';
+  END IF;
 
-  select json_agg(row_to_json(r)) into v_results
-  from (
-    select
-      res.*,
-      p.name as project_name,
-      p.category as project_category,
-      p.banner_url as project_banner,
-      p."order" as project_order
-    from public.results res
-    join public.projects p on p.id = res.project_id
-    where res.event_id = p_event_id
-    order by res.average_general desc nulls last
+  SELECT json_agg(row_to_json(r))
+  INTO v_results
+  FROM (
+    SELECT
+      res.id,
+      res.event_id,
+      res.project_id,
+      res.total_votes,
+      res.sum_innovation,
+      res.sum_impact,
+      res.sum_development,
+      res.average_innovation,
+      res.average_impact,
+      res.average_development,
+      res.average_general,
+      res.percentage,
+      res.popular_points,
+      res.updated_at,
+      p.name AS project_name,
+      p.category AS project_category,
+      p.banner_url AS project_banner,
+      p."order" AS project_order
+    FROM public.results res
+    JOIN public.projects p
+      ON p.id = res.project_id
+     AND p.event_id = res.event_id
+    WHERE res.event_id = p_event_id
+    ORDER BY res.average_general DESC NULLS LAST
   ) r;
 
-  return json_build_object('success', true, 'results', coalesce(v_results, '[]'::json));
-end;
+  RETURN json_build_object(
+    'success', true,
+    'event_id', p_event_id,
+    'results', COALESCE(v_results, '[]'::json)
+  );
+END;
 $$;
 
--- 5.5 reconcile_results com verificação has_event_access
+-- =============================================================================
+-- 9. CONCILIAÇÃO DE RESULTADOS (reconcile_results)
+-- =============================================================================
+
 CREATE OR REPLACE FUNCTION public.reconcile_results(
   p_event_id text,
-  p_project_id text default null
-) RETURNS json
+  p_project_id text DEFAULT NULL
+)
+RETURNS json
 LANGUAGE plpgsql
 SECURITY DEFINER
 SET search_path = public, pg_temp
 AS $$
-declare
+DECLARE
+  v_event record;
   v_rec record;
-  v_count int := 0;
-begin
-  if not (public.is_admin() and public.has_event_access(p_event_id)) then
-    raise exception 'Acesso negado: Você não possui autorização para conciliar os resultados deste evento.';
-  end if;
+  v_count integer := 0;
+BEGIN
+  -- Bloqueio exclusivo do evento. Concorre com submit_vote (FOR SHARE).
+  SELECT *
+  INTO v_event
+  FROM public.events
+  WHERE id = p_event_id
+  FOR UPDATE;
 
-  for v_rec in
-    select
-      v.event_id,
-      v.project_id,
-      count(*) as total_votes,
-      sum(coalesce(v.innovation_score, v.innovation)) as sum_inno,
-      sum(coalesce(v.cptm_impact_score, v.impact)) as sum_imp,
-      sum(coalesce(v.development_score, v.development)) as sum_dev
-    from public.votes v
-    where v.event_id = p_event_id
-      and (p_project_id is null or v.project_id = p_project_id)
-    group by v.event_id, v.project_id
-  loop
-    insert into public.results (
-      id, event_id, project_id, total_votes, sum_innovation, sum_impact, sum_development,
-      average_innovation, average_impact, average_development, average_general, percentage, popular_points, updated_at
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Evento não encontrado.' USING ERRCODE = 'P0002';
+  END IF;
+
+  IF NOT (
+    public.is_admin()
+    AND public.has_event_access(p_event_id)
+  ) THEN
+    RAISE EXCEPTION 'Acesso negado à conciliação.' USING ERRCODE = '42501';
+  END IF;
+
+  IF p_project_id IS NOT NULL AND NOT EXISTS (
+    SELECT 1
+    FROM public.projects
+    WHERE id = p_project_id
+      AND event_id = p_event_id
+  ) THEN
+    RAISE EXCEPTION 'O projeto informado não pertence ao evento.'
+      USING ERRCODE = '23514';
+  END IF;
+
+  FOR v_rec IN
+    SELECT
+      p.event_id,
+      p.id AS project_id,
+      count(v.id) AS total_votes,
+      COALESCE(
+        sum(COALESCE(v.innovation_score, v.innovation)), 0
+      ) AS sum_inno,
+      COALESCE(
+        sum(COALESCE(v.cptm_impact_score, v.impact)), 0
+      ) AS sum_imp,
+      COALESCE(
+        sum(COALESCE(v.development_score, v.development)), 0
+      ) AS sum_dev
+    FROM public.projects p
+    LEFT JOIN public.votes v
+      ON v.event_id = p.event_id
+     AND v.project_id = p.id
+    WHERE p.event_id = p_event_id
+      AND (
+        p_project_id IS NULL
+        OR p.id = p_project_id
+      )
+    GROUP BY p.event_id, p.id
+  LOOP
+
+    -- Salvaguarda de dados históricos: se a contagem em public.votes for zero,
+    -- mas o projeto já possuir resultado consolidado histórico (total_votes > 0),
+    -- preserva os dados históricos intactos para evitar zeramento acidental.
+    IF v_rec.total_votes = 0 AND EXISTS (
+      SELECT 1
+      FROM public.results r
+      WHERE r.id = v_rec.event_id || '_' || v_rec.project_id
+        AND r.total_votes > 0
+    ) THEN
+      CONTINUE;
+    END IF;
+
+    INSERT INTO public.results (
+      id,
+      event_id,
+      project_id,
+      total_votes,
+      sum_innovation,
+      sum_impact,
+      sum_development,
+      average_innovation,
+      average_impact,
+      average_development,
+      average_general,
+      percentage,
+      popular_points,
+      updated_at
     )
-    values (
+    VALUES (
       v_rec.event_id || '_' || v_rec.project_id,
       v_rec.event_id,
       v_rec.project_id,
@@ -447,35 +1098,88 @@ begin
       v_rec.sum_inno,
       v_rec.sum_imp,
       v_rec.sum_dev,
-      round(v_rec.sum_inno::numeric / v_rec.total_votes, 2),
-      round(v_rec.sum_imp::numeric / v_rec.total_votes, 2),
-      round(v_rec.sum_dev::numeric / v_rec.total_votes, 2),
-      round((((v_rec.sum_inno + v_rec.sum_imp + v_rec.sum_dev)::numeric / 3.0) / v_rec.total_votes), 2),
-      round(((((v_rec.sum_inno + v_rec.sum_imp + v_rec.sum_dev)::numeric / 3.0) / v_rec.total_votes) / 5.0) * 100.0, 2),
-      round(((((v_rec.sum_inno + v_rec.sum_imp + v_rec.sum_dev)::numeric / 3.0) / v_rec.total_votes) / 5.0) * 20.0, 2),
+
+      CASE WHEN v_rec.total_votes > 0
+        THEN round(v_rec.sum_inno::numeric / v_rec.total_votes, 2)
+        ELSE 0
+      END,
+
+      CASE WHEN v_rec.total_votes > 0
+        THEN round(v_rec.sum_imp::numeric / v_rec.total_votes, 2)
+        ELSE 0
+      END,
+
+      CASE WHEN v_rec.total_votes > 0
+        THEN round(v_rec.sum_dev::numeric / v_rec.total_votes, 2)
+        ELSE 0
+      END,
+
+      CASE WHEN v_rec.total_votes > 0
+        THEN round(
+          (
+            (v_rec.sum_inno + v_rec.sum_imp + v_rec.sum_dev)
+            ::numeric / 3.0
+          ) / v_rec.total_votes,
+          2
+        )
+        ELSE 0
+      END,
+
+      CASE WHEN v_rec.total_votes > 0
+        THEN round(
+          (
+            (
+              (v_rec.sum_inno + v_rec.sum_imp + v_rec.sum_dev)
+              ::numeric / 3.0
+            ) / v_rec.total_votes / 5.0
+          ) * 100.0,
+          2
+        )
+        ELSE 0
+      END,
+
+      CASE WHEN v_rec.total_votes > 0
+        THEN round(
+          (
+            (
+              (v_rec.sum_inno + v_rec.sum_imp + v_rec.sum_dev)
+              ::numeric / 3.0
+            ) / v_rec.total_votes / 5.0
+          ) * 20.0,
+          2
+        )
+        ELSE 0
+      END,
       now()
     )
-    on conflict (id) do update set
-      total_votes = excluded.total_votes,
-      sum_innovation = excluded.sum_innovation,
-      sum_impact = excluded.sum_impact,
-      sum_development = excluded.sum_development,
-      average_innovation = excluded.average_innovation,
-      average_impact = excluded.average_impact,
-      average_development = excluded.average_development,
-      average_general = excluded.average_general,
-      percentage = excluded.percentage,
-      popular_points = excluded.popular_points,
+    ON CONFLICT (id) DO UPDATE SET
+      total_votes = EXCLUDED.total_votes,
+      sum_innovation = EXCLUDED.sum_innovation,
+      sum_impact = EXCLUDED.sum_impact,
+      sum_development = EXCLUDED.sum_development,
+      average_innovation = EXCLUDED.average_innovation,
+      average_impact = EXCLUDED.average_impact,
+      average_development = EXCLUDED.average_development,
+      average_general = EXCLUDED.average_general,
+      percentage = EXCLUDED.percentage,
+      popular_points = EXCLUDED.popular_points,
       updated_at = now();
 
     v_count := v_count + 1;
-  end loop;
+  END LOOP;
 
-  return json_build_object('success', true, 'reconciled_projects', v_count);
-end;
+  RETURN json_build_object(
+    'success', true,
+    'event_id', p_event_id,
+    'reconciled_projects', v_count
+  );
+END;
 $$;
 
--- 5.6 submit_vote: Registro oficial e atômico do voto com cálculo agregado
+-- =============================================================================
+-- 10. SUBMISSÃO OFICIAL DE VOTO (submit_vote)
+-- =============================================================================
+
 CREATE OR REPLACE FUNCTION public.submit_vote(
   p_event_id text,
   p_round_id uuid,
@@ -483,410 +1187,852 @@ CREATE OR REPLACE FUNCTION public.submit_vote(
   p_innovation int,
   p_impact int,
   p_development int
-) RETURNS json
+)
+RETURNS json
 LANGUAGE plpgsql
 SECURITY DEFINER
 SET search_path = public, pg_temp
 AS $$
-declare
+DECLARE
   v_voter_id uuid;
-  v_round record;
   v_event record;
+  v_project record;
+  v_round record;
   v_vote_id text;
   v_result_id text;
-begin
-  -- 1. Obter identidade do votante exclusivamente do contexto JWT
+BEGIN
+  -- 1. Identidade do eleitor extraída exclusivamente do JWT autenticado
   v_voter_id := auth.uid();
-  if v_voter_id is null then
-    raise exception 'Acesso não autenticado: Sessão do participante inválida ou expirada.';
-  end if;
+  IF v_voter_id IS NULL THEN
+    RAISE EXCEPTION 'Sessão inválida. Autentique-se novamente.'
+      USING ERRCODE = '42501';
+  END IF;
 
-  -- 2. Validar notas entre 1 e 5
-  if p_innovation not between 1 and 5 or p_impact not between 1 and 5 or p_development not between 1 and 5 then
-    raise exception 'Notas inválidas: As notas devem ser valores inteiros entre 1 e 5.';
-  end if;
+  -- 2. Validação estrita das notas: obrigatórias e exclusivamente de 1 a 5
+  IF p_innovation IS NULL
+     OR p_impact IS NULL
+     OR p_development IS NULL
+     OR p_innovation NOT BETWEEN 1 AND 5
+     OR p_impact NOT BETWEEN 1 AND 5
+     OR p_development NOT BETWEEN 1 AND 5 THEN
+    RAISE EXCEPTION
+      'Notas inválidas. Cada critério deve receber uma nota inteira entre 1 e 5.'
+      USING ERRCODE = '22023';
+  END IF;
 
-  -- 3. Lock transacional compartilhado na rodada e validações de integridade
-  select * into v_round from public.rounds where id = p_round_id for share;
-  if not found or v_round.status <> 'open' then
-    raise exception 'A rodada de votação para este projeto não está aberta.';
-  end if;
+  -- 3. Ordem hierárquica de bloqueios anti-deadlock: evento -> projeto -> rodada
+  SELECT *
+  INTO v_event
+  FROM public.events
+  WHERE id = p_event_id
+  FOR SHARE;
 
-  if v_round.project_id <> p_project_id or v_round.event_id <> p_event_id then
-    raise exception 'Inconsistência de parâmetros: O projeto ou evento informado não corresponde à rodada ativa.';
-  end if;
+  IF NOT FOUND OR v_event.status <> 'active' THEN
+    RAISE EXCEPTION 'Evento inexistente ou não ativo para votação.'
+      USING ERRCODE = '23514';
+  END IF;
 
-  -- 4. Validar se o evento existe e está ativo
-  select * into v_event from public.events where id = p_event_id;
-  if not found or v_event.status <> 'active' then
-    raise exception 'O evento "%" não está ativo para votação.', p_event_id;
-  end if;
+  SELECT *
+  INTO v_project
+  FROM public.projects
+  WHERE id = p_project_id
+    AND event_id = p_event_id
+  FOR SHARE;
+
+  IF NOT FOUND OR v_project.active IS DISTINCT FROM true THEN
+    RAISE EXCEPTION 'Projeto inexistente, inativo ou incompatível.'
+      USING ERRCODE = '23514';
+  END IF;
+
+  SELECT *
+  INTO v_round
+  FROM public.rounds
+  WHERE id = p_round_id
+  FOR SHARE;
+
+  IF NOT FOUND OR v_round.status <> 'open' THEN
+    RAISE EXCEPTION 'Não existe rodada aberta para este voto.'
+      USING ERRCODE = '23514';
+  END IF;
+
+  IF v_round.event_id <> p_event_id
+     OR v_round.project_id <> p_project_id THEN
+    RAISE EXCEPTION 'A rodada não corresponde ao evento e projeto informados.'
+      USING ERRCODE = '23514';
+  END IF;
+
+  IF v_event.current_round_id IS DISTINCT FROM p_round_id THEN
+    RAISE EXCEPTION 'A rodada informada não é a rodada atualmente liberada para votação.'
+      USING ERRCODE = '23514';
+  END IF;
 
   v_vote_id := p_event_id || '_' || p_project_id || '_' || v_voter_id::text;
   v_result_id := p_event_id || '_' || p_project_id;
 
-  -- 5. Inserir voto individual com chave única (bloqueio atômico de duplicidade)
-  begin
-    insert into public.votes (
-      id, event_id, project_id, round_id, voter_id, voter_uid,
-      innovation_score, cptm_impact_score, development_score,
-      innovation, impact, development
+  -- 4. Inserção atômica do voto com preenchimento dual de compatibilidade
+  BEGIN
+    INSERT INTO public.votes (
+      id,
+      event_id,
+      project_id,
+      round_id,
+      voter_id,
+      voter_uid,
+      innovation_score,
+      cptm_impact_score,
+      development_score,
+      innovation,
+      impact,
+      development
     )
-    values (
-      v_vote_id, p_event_id, p_project_id, p_round_id, v_voter_id, v_voter_id,
-      p_innovation, p_impact, p_development,
-      p_innovation, p_impact, p_development
+    VALUES (
+      v_vote_id,
+      p_event_id,
+      p_project_id,
+      p_round_id,
+      v_voter_id,
+      v_voter_id,
+      p_innovation,
+      p_impact,
+      p_development,
+      p_innovation,
+      p_impact,
+      p_development
     );
-  exception when unique_violation then
-    raise exception 'Voto duplicado: Você já avaliou este projeto neste evento.';
-  end;
+  EXCEPTION
+    WHEN unique_violation THEN
+      RAISE EXCEPTION 'Voto duplicado: você já avaliou este projeto neste evento.'
+        USING ERRCODE = '23505';
+  END;
 
-  -- 6. Atualização atômica na tabela public.results (lock exclusivo na linha via ON CONFLICT DO UPDATE)
-  insert into public.results (
-    id, event_id, project_id, total_votes, sum_innovation, sum_impact, sum_development,
-    average_innovation, average_impact, average_development, average_general, percentage, popular_points, updated_at
+  -- 5. Atualização atômica imediata dos resultados consolidados
+  INSERT INTO public.results (
+    id,
+    event_id,
+    project_id,
+    total_votes,
+    sum_innovation,
+    sum_impact,
+    sum_development,
+    average_innovation,
+    average_impact,
+    average_development,
+    average_general,
+    percentage,
+    popular_points,
+    updated_at
   )
-  values (
-    v_result_id, p_event_id, p_project_id, 1, p_innovation, p_impact, p_development,
-    p_innovation, p_impact, p_development,
-    round(((p_innovation + p_impact + p_development) / 3.0), 2),
-    round((((p_innovation + p_impact + p_development) / 3.0) / 5.0) * 100.0, 2),
-    round((((p_innovation + p_impact + p_development) / 3.0) / 5.0) * 20.0, 2),
+  VALUES (
+    v_result_id,
+    p_event_id,
+    p_project_id,
+    1,
+    p_innovation,
+    p_impact,
+    p_development,
+    p_innovation,
+    p_impact,
+    p_development,
+    round(
+      (p_innovation + p_impact + p_development)::numeric / 3.0,
+      2
+    ),
+    round(
+      (
+        (p_innovation + p_impact + p_development)::numeric
+        / 3.0 / 5.0
+      ) * 100.0,
+      2
+    ),
+    round(
+      (
+        (p_innovation + p_impact + p_development)::numeric
+        / 3.0 / 5.0
+      ) * 20.0,
+      2
+    ),
     now()
   )
-  on conflict (id) do update set
+  ON CONFLICT (id) DO UPDATE SET
     total_votes = public.results.total_votes + 1,
-    sum_innovation = public.results.sum_innovation + p_innovation,
-    sum_impact = public.results.sum_impact + p_impact,
-    sum_development = public.results.sum_development + p_development,
-    average_innovation = round((public.results.sum_innovation + p_innovation)::numeric / (public.results.total_votes + 1), 2),
-    average_impact = round((public.results.sum_impact + p_impact)::numeric / (public.results.total_votes + 1), 2),
-    average_development = round((public.results.sum_development + p_development)::numeric / (public.results.total_votes + 1), 2),
-    average_general = round((((public.results.sum_innovation + p_innovation + public.results.sum_impact + p_impact + public.results.sum_development + p_development)::numeric / 3.0) / (public.results.total_votes + 1)), 2),
-    percentage = round((((((public.results.sum_innovation + p_innovation + public.results.sum_impact + p_impact + public.results.sum_development + p_development)::numeric / 3.0) / (public.results.total_votes + 1)) / 5.0) * 100.0), 2),
-    popular_points = round((((((public.results.sum_innovation + p_innovation + public.results.sum_impact + p_impact + public.results.sum_development + p_development)::numeric / 3.0) / (public.results.total_votes + 1)) / 5.0) * 20.0), 2),
+
+    sum_innovation =
+      public.results.sum_innovation + EXCLUDED.sum_innovation,
+
+    sum_impact =
+      public.results.sum_impact + EXCLUDED.sum_impact,
+
+    sum_development =
+      public.results.sum_development + EXCLUDED.sum_development,
+
+    average_innovation = round(
+      (
+        public.results.sum_innovation + EXCLUDED.sum_innovation
+      )::numeric
+      / (public.results.total_votes + 1),
+      2
+    ),
+
+    average_impact = round(
+      (
+        public.results.sum_impact + EXCLUDED.sum_impact
+      )::numeric
+      / (public.results.total_votes + 1),
+      2
+    ),
+
+    average_development = round(
+      (
+        public.results.sum_development + EXCLUDED.sum_development
+      )::numeric
+      / (public.results.total_votes + 1),
+      2
+    ),
+
+    average_general = round(
+      (
+        (
+          public.results.sum_innovation + EXCLUDED.sum_innovation
+          + public.results.sum_impact + EXCLUDED.sum_impact
+          + public.results.sum_development + EXCLUDED.sum_development
+        )::numeric / 3.0
+      ) / (public.results.total_votes + 1),
+      2
+    ),
+
+    percentage = round(
+      (
+        (
+          (
+            public.results.sum_innovation + EXCLUDED.sum_innovation
+            + public.results.sum_impact + EXCLUDED.sum_impact
+            + public.results.sum_development + EXCLUDED.sum_development
+          )::numeric / 3.0
+        ) / (public.results.total_votes + 1) / 5.0
+      ) * 100.0,
+      2
+    ),
+
+    popular_points = round(
+      (
+        (
+          (
+            public.results.sum_innovation + EXCLUDED.sum_innovation
+            + public.results.sum_impact + EXCLUDED.sum_impact
+            + public.results.sum_development + EXCLUDED.sum_development
+          )::numeric / 3.0
+        ) / (public.results.total_votes + 1) / 5.0
+      ) * 20.0,
+      2
+    ),
+
     updated_at = now();
 
-  return json_build_object('success', true, 'vote_id', v_vote_id);
-end;
+  RETURN json_build_object(
+    'success', true,
+    'vote_id', v_vote_id
+  );
+END;
 $$;
 
--- ------------------------------------------------------------------------------
--- 6. BLINDAGEM DA TABELA public.votes (SIGILO ABSOLUTO DO VOTO)
--- ------------------------------------------------------------------------------
+-- =============================================================================
+-- 11. RLS E PRIVILÉGIOS: VOTOS INDIVIDUAIS (SIGILO RIGOROSO DO VOTO)
+-- =============================================================================
+
 ALTER TABLE public.votes ENABLE ROW LEVEL SECURITY;
 
--- 6.1 Remove TODAS as políticas de public.votes (conhecidas ou legadas) de forma dinâmica
 DO $$
 DECLARE
   pol record;
 BEGIN
-  FOR pol IN (
+  FOR pol IN
     SELECT policyname
     FROM pg_policies
-    WHERE schemaname = 'public' AND tablename = 'votes'
-  ) LOOP
-    EXECUTE format('DROP POLICY IF EXISTS %I ON public.votes;', pol.policyname);
+    WHERE schemaname = 'public'
+      AND tablename = 'votes'
+  LOOP
+    EXECUTE format(
+      'DROP POLICY IF EXISTS %I ON public.votes',
+      pol.policyname
+    );
   END LOOP;
 END;
 $$;
 
--- 6.2 Política de Leitura ÚNICA: ESTRITAMENTE o próprio votante
--- Administradores e Superadmins NÃO podem ler votos individuais de participantes.
-CREATE POLICY "votes_select_strict_own"
-  ON public.votes
-  FOR SELECT
-  TO authenticated
-  USING (
-    voter_id = auth.uid()
-  );
+-- Somente o próprio eleitor autenticado pode consultar o seu próprio voto.
+-- NENHUM administrador possui permissão de leitura sobre votos individuais.
+CREATE POLICY votes_select_strict_own
+ON public.votes
+FOR SELECT
+TO authenticated
+USING (
+  voter_id::text = auth.uid()::text
+  OR voter_uid::text = auth.uid()::text
+);
 
--- 6.3 Privilégios de Tabela: Revoga mutações diretas em votes para a API
--- Votos são gravados EXCLUSIVAMENTE via public.submit_vote() (SECURITY DEFINER)
-REVOKE ALL ON TABLE public.votes FROM public, anon, authenticated;
-GRANT SELECT ON TABLE public.votes TO authenticated;
+-- Revoga todos os privilégios diretos em votes
+REVOKE ALL ON TABLE public.votes
+FROM PUBLIC, anon, authenticated;
 
--- ------------------------------------------------------------------------------
--- 7. BLINDAGEM DA TABELA public.results (APURAÇÃO AGREGADA SEGURA)
--- ------------------------------------------------------------------------------
+-- Concede estritamente SELECT ao authenticated (restringido pela policy acima)
+GRANT SELECT ON TABLE public.votes
+TO authenticated;
+
+-- =============================================================================
+-- 12. RLS E PRIVILÉGIOS: RESULTADOS AGREGADOS
+-- =============================================================================
+
 ALTER TABLE public.results ENABLE ROW LEVEL SECURITY;
 
--- 7.1 Remove TODAS as políticas de public.results de forma dinâmica
 DO $$
 DECLARE
   pol record;
 BEGIN
-  FOR pol IN (
+  FOR pol IN
     SELECT policyname
     FROM pg_policies
-    WHERE schemaname = 'public' AND tablename = 'results'
-  ) LOOP
-    EXECUTE format('DROP POLICY IF EXISTS %I ON public.results;', pol.policyname);
+    WHERE schemaname = 'public'
+      AND tablename = 'results'
+  LOOP
+    EXECUTE format(
+      'DROP POLICY IF EXISTS %I ON public.results',
+      pol.policyname
+    );
   END LOOP;
 END;
 $$;
 
--- 7.2 Nova política de resultados agregados
-CREATE POLICY "results_select_policy"
-  ON public.results
-  FOR SELECT
-  TO public
-  USING (
-    -- 1. Administrador autorizado no evento: acesso irrestrito para condução
-    (public.is_admin() AND public.has_event_access(event_id))
-    -- 2. Público / Telão: após publicação oficial dos resultados do evento
-    OR EXISTS (
-      SELECT 1 FROM public.events e
-      WHERE e.id = results.event_id
-        AND e.results_published = true
-    )
-    -- 3. Telão / Medidor: durante a rodada aberta do projeto sob avaliação
-    OR EXISTS (
-      SELECT 1 FROM public.rounds r
-      WHERE r.event_id = results.event_id
-        AND r.project_id = results.project_id
-        AND r.status = 'open'
-    )
-  );
+CREATE POLICY results_select_policy
+ON public.results
+FOR SELECT
+TO public
+USING (
+  (
+    public.is_admin()
+    AND public.has_event_access(event_id)
+  )
+  OR EXISTS (
+    SELECT 1
+    FROM public.events e
+    WHERE e.id = results.event_id
+      AND e.results_published = true
+  )
+  OR EXISTS (
+    SELECT 1
+    FROM public.rounds r
+    WHERE r.event_id = results.event_id
+      AND r.project_id = results.project_id
+      AND r.status = 'open'
+  )
+);
 
-REVOKE INSERT, UPDATE, DELETE ON TABLE public.results FROM anon, authenticated, public;
-GRANT SELECT ON TABLE public.results TO authenticated, anon;
+REVOKE ALL ON TABLE public.results
+FROM PUBLIC, anon, authenticated;
 
--- ------------------------------------------------------------------------------
--- 8. BLINDAGEM DA TABELA public.events
--- ------------------------------------------------------------------------------
+GRANT SELECT (
+  id,
+  event_id,
+  project_id,
+  total_votes,
+  sum_innovation,
+  sum_impact,
+  sum_development,
+  average_innovation,
+  average_impact,
+  average_development,
+  average_general,
+  percentage,
+  popular_points,
+  updated_at
+)
+ON TABLE public.results
+TO anon, authenticated;
+
+-- =============================================================================
+-- 13. RLS E PRIVILÉGIOS: EVENTOS
+-- =============================================================================
+
 ALTER TABLE public.events ENABLE ROW LEVEL SECURITY;
 
--- 8.1 Remove TODAS as políticas de public.events de forma dinâmica
 DO $$
 DECLARE
   pol record;
 BEGIN
-  FOR pol IN (
+  FOR pol IN
     SELECT policyname
     FROM pg_policies
-    WHERE schemaname = 'public' AND tablename = 'events'
-  ) LOOP
-    EXECUTE format('DROP POLICY IF EXISTS %I ON public.events;', pol.policyname);
+    WHERE schemaname = 'public'
+      AND tablename = 'events'
+  LOOP
+    EXECUTE format(
+      'DROP POLICY IF EXISTS %I ON public.events',
+      pol.policyname
+    );
   END LOOP;
 END;
 $$;
 
--- 8.2 Leitura de Eventos
-CREATE POLICY "events_select_policy"
-  ON public.events
-  FOR SELECT
-  TO public
-  USING (
-    CASE
-      -- Administrador: visualiza apenas os eventos autorizados (Superadmin vê todos)
-      WHEN public.is_admin() THEN public.has_event_access(id)
-      -- Público / Votantes: visualizam apenas eventos ativos ou finalizados
-      ELSE status IN ('active', 'finished')
-    END
-  );
+CREATE POLICY events_select_policy
+ON public.events
+FOR SELECT
+TO public
+USING (
+  CASE
+    WHEN public.is_admin()
+      THEN public.has_event_access(id)
+    ELSE status IN ('active', 'finished')
+  END
+);
 
--- 8.3 Atualização de Eventos
-CREATE POLICY "events_admin_mutation"
-  ON public.events
-  FOR UPDATE
-  TO authenticated
-  USING (
-    public.is_superadmin() OR (
-      public.has_event_access(id) AND EXISTS (
-        SELECT 1 FROM public.admin_profiles
-        WHERE id = auth.uid() AND active = true AND role IN ('superadmin', 'admin')
-      )
+CREATE POLICY events_admin_mutation
+ON public.events
+FOR UPDATE
+TO authenticated
+USING (
+  public.is_superadmin()
+  OR (
+    public.has_event_access(id)
+    AND EXISTS (
+      SELECT 1
+      FROM public.admin_profiles
+      WHERE id = auth.uid()
+        AND active = true
+        AND role IN ('superadmin', 'admin')
     )
   )
-  WITH CHECK (
-    public.is_superadmin() OR (
-      public.has_event_access(id) AND EXISTS (
-        SELECT 1 FROM public.admin_profiles
-        WHERE id = auth.uid() AND active = true AND role IN ('superadmin', 'admin')
-      )
+)
+WITH CHECK (
+  public.is_superadmin()
+  OR (
+    public.has_event_access(id)
+    AND EXISTS (
+      SELECT 1
+      FROM public.admin_profiles
+      WHERE id = auth.uid()
+        AND active = true
+        AND role IN ('superadmin', 'admin')
     )
-  );
+  )
+);
 
--- 8.4 Inserção e Exclusão de Eventos: Exclusivos de Superadmin
-CREATE POLICY "events_superadmin_insert"
-  ON public.events
-  FOR INSERT
-  TO authenticated
-  WITH CHECK (
-    public.is_superadmin()
-  );
+CREATE POLICY events_superadmin_insert
+ON public.events
+FOR INSERT
+TO authenticated
+WITH CHECK (public.is_superadmin());
 
-CREATE POLICY "events_superadmin_delete"
-  ON public.events
-  FOR DELETE
-  TO authenticated
-  USING (
-    public.is_superadmin()
-  );
+CREATE POLICY events_superadmin_delete
+ON public.events
+FOR DELETE
+TO authenticated
+USING (public.is_superadmin());
 
--- ------------------------------------------------------------------------------
--- 9. BLINDAGEM DA TABELA public.projects
--- ------------------------------------------------------------------------------
+REVOKE ALL ON TABLE public.events
+FROM PUBLIC, anon, authenticated;
+
+GRANT SELECT ON TABLE public.events
+TO anon, authenticated;
+
+GRANT INSERT, UPDATE, DELETE ON TABLE public.events
+TO authenticated;
+
+-- =============================================================================
+-- 14. RLS E PRIVILÉGIOS: PROJETOS
+-- =============================================================================
+
 ALTER TABLE public.projects ENABLE ROW LEVEL SECURITY;
 
--- 9.1 Remove TODAS as políticas de public.projects de forma dinâmica
 DO $$
 DECLARE
   pol record;
 BEGIN
-  FOR pol IN (
+  FOR pol IN
     SELECT policyname
     FROM pg_policies
-    WHERE schemaname = 'public' AND tablename = 'projects'
-  ) LOOP
-    EXECUTE format('DROP POLICY IF EXISTS %I ON public.projects;', pol.policyname);
+    WHERE schemaname = 'public'
+      AND tablename = 'projects'
+  LOOP
+    EXECUTE format(
+      'DROP POLICY IF EXISTS %I ON public.projects',
+      pol.policyname
+    );
   END LOOP;
 END;
 $$;
 
-CREATE POLICY "projects_select_policy"
-  ON public.projects
-  FOR SELECT
-  TO public
-  USING (
-    CASE
-      WHEN public.is_admin() THEN public.has_event_access(event_id)
-      ELSE active = true AND EXISTS (
-        SELECT 1 FROM public.events e
-        WHERE e.id = projects.event_id AND e.status IN ('active', 'finished')
+CREATE POLICY projects_select_policy
+ON public.projects
+FOR SELECT
+TO public
+USING (
+  CASE
+    WHEN public.is_admin()
+      THEN public.has_event_access(event_id)
+    ELSE (
+      active = true
+      AND EXISTS (
+        SELECT 1
+        FROM public.events e
+        WHERE e.id = projects.event_id
+          AND e.status IN ('active', 'finished')
       )
-    END
-  );
-
-CREATE POLICY "projects_admin_mutation"
-  ON public.projects
-  FOR ALL
-  TO authenticated
-  USING (
-    public.has_event_access(event_id) AND EXISTS (
-      SELECT 1 FROM public.admin_profiles
-      WHERE id = auth.uid() AND active = true AND role IN ('superadmin', 'admin')
     )
+  END
+);
+
+CREATE POLICY projects_admin_mutation
+ON public.projects
+FOR ALL
+TO authenticated
+USING (
+  public.has_event_access(event_id)
+  AND EXISTS (
+    SELECT 1
+    FROM public.admin_profiles
+    WHERE id = auth.uid()
+      AND active = true
+      AND role IN ('superadmin', 'admin')
   )
-  WITH CHECK (
-    public.has_event_access(event_id) AND EXISTS (
-      SELECT 1 FROM public.admin_profiles
-      WHERE id = auth.uid() AND active = true AND role IN ('superadmin', 'admin')
-    )
-  );
+)
+WITH CHECK (
+  public.has_event_access(event_id)
+  AND EXISTS (
+    SELECT 1
+    FROM public.admin_profiles
+    WHERE id = auth.uid()
+      AND active = true
+      AND role IN ('superadmin', 'admin')
+  )
+);
 
--- ------------------------------------------------------------------------------
--- 10. BLINDAGEM DA TABELA public.rounds
--- ------------------------------------------------------------------------------
+REVOKE ALL ON TABLE public.projects
+FROM PUBLIC, anon, authenticated;
+
+GRANT SELECT ON TABLE public.projects
+TO anon, authenticated;
+
+GRANT INSERT, UPDATE, DELETE ON TABLE public.projects
+TO authenticated;
+
+-- =============================================================================
+-- 15. RLS E PRIVILÉGIOS: RODADAS
+-- =============================================================================
+
 ALTER TABLE public.rounds ENABLE ROW LEVEL SECURITY;
 
--- 10.1 Remove TODAS as políticas de public.rounds de forma dinâmica
 DO $$
 DECLARE
   pol record;
 BEGIN
-  FOR pol IN (
+  FOR pol IN
     SELECT policyname
     FROM pg_policies
-    WHERE schemaname = 'public' AND tablename = 'rounds'
-  ) LOOP
-    EXECUTE format('DROP POLICY IF EXISTS %I ON public.rounds;', pol.policyname);
+    WHERE schemaname = 'public'
+      AND tablename = 'rounds'
+  LOOP
+    EXECUTE format(
+      'DROP POLICY IF EXISTS %I ON public.rounds',
+      pol.policyname
+    );
   END LOOP;
 END;
 $$;
 
-CREATE POLICY "rounds_select_policy"
-  ON public.rounds
-  FOR SELECT
-  TO public
-  USING (
-    CASE
-      WHEN public.is_admin() THEN public.has_event_access(event_id)
-      ELSE EXISTS (
-        SELECT 1 FROM public.events e
-        WHERE e.id = rounds.event_id AND e.status IN ('active', 'finished')
-      )
-    END
-  );
+CREATE POLICY rounds_select_policy
+ON public.rounds
+FOR SELECT
+TO public
+USING (
+  CASE
+    WHEN public.is_admin()
+      THEN public.has_event_access(event_id)
+    ELSE EXISTS (
+      SELECT 1
+      FROM public.events e
+      WHERE e.id = rounds.event_id
+        AND e.status IN ('active', 'finished')
+    )
+  END
+);
 
--- ------------------------------------------------------------------------------
--- 11. RLS DA TABELA public.event_admins
--- ------------------------------------------------------------------------------
+REVOKE ALL ON TABLE public.rounds
+FROM PUBLIC, anon, authenticated;
+
+GRANT SELECT ON TABLE public.rounds
+TO anon, authenticated;
+
+-- =============================================================================
+-- 16. RLS E PRIVILÉGIOS: EVENT_ADMINS
+-- =============================================================================
+
 ALTER TABLE public.event_admins ENABLE ROW LEVEL SECURITY;
 
--- 11.1 Remove TODAS as políticas de public.event_admins de forma dinâmica
 DO $$
 DECLARE
   pol record;
 BEGIN
-  FOR pol IN (
+  FOR pol IN
     SELECT policyname
     FROM pg_policies
-    WHERE schemaname = 'public' AND tablename = 'event_admins'
-  ) LOOP
-    EXECUTE format('DROP POLICY IF EXISTS %I ON public.event_admins;', pol.policyname);
+    WHERE schemaname = 'public'
+      AND tablename = 'event_admins'
+  LOOP
+    EXECUTE format(
+      'DROP POLICY IF EXISTS %I ON public.event_admins',
+      pol.policyname
+    );
   END LOOP;
 END;
 $$;
 
-CREATE POLICY "event_admins_select"
-  ON public.event_admins
-  FOR SELECT
-  TO authenticated
-  USING (
-    public.is_superadmin() OR user_id = auth.uid()
-  );
+CREATE POLICY event_admins_select
+ON public.event_admins
+FOR SELECT
+TO authenticated
+USING (
+  public.is_superadmin()
+  OR user_id = auth.uid()
+);
 
-CREATE POLICY "event_admins_insert"
-  ON public.event_admins
-  FOR INSERT
-  TO authenticated
-  WITH CHECK (
-    public.is_superadmin()
-  );
+CREATE POLICY event_admins_insert
+ON public.event_admins
+FOR INSERT
+TO authenticated
+WITH CHECK (public.is_superadmin());
 
-CREATE POLICY "event_admins_delete"
-  ON public.event_admins
-  FOR DELETE
-  TO authenticated
-  USING (
-    public.is_superadmin()
-  );
+CREATE POLICY event_admins_delete
+ON public.event_admins
+FOR DELETE
+TO authenticated
+USING (public.is_superadmin());
 
--- ------------------------------------------------------------------------------
--- 12. PERMISSÕES DE EXECUÇÃO DAS PROCEDURES (GRANT / REVOKE)
--- ------------------------------------------------------------------------------
--- 12.1 Gestão de Acessos a Eventos (Exclusivo Superadmin via lógica interna)
-REVOKE EXECUTE ON FUNCTION public.grant_event_access(text, uuid) FROM public;
+REVOKE ALL ON TABLE public.event_admins
+FROM PUBLIC, anon, authenticated;
+
+GRANT SELECT, INSERT, DELETE ON TABLE public.event_admins
+TO authenticated;
+
+-- =============================================================================
+-- 17. PERMISSÕES DE EXECUÇÃO DAS FUNÇÕES (DCL)
+-- =============================================================================
+
+-- Gestão de vínculo de administradores
+REVOKE ALL ON FUNCTION public.grant_event_access(text, uuid) FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION public.grant_event_access(text, uuid) TO authenticated;
 
-REVOKE EXECUTE ON FUNCTION public.revoke_event_access(text, uuid) FROM public;
+REVOKE ALL ON FUNCTION public.revoke_event_access(text, uuid) FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION public.revoke_event_access(text, uuid) TO authenticated;
 
--- 12.2 Verificação de Acesso a Eventos
-REVOKE EXECUTE ON FUNCTION public.has_event_access(text) FROM public;
+-- Verificação de acesso e autorização
+REVOKE ALL ON FUNCTION public.has_event_access(text) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION public.has_event_access(text) TO authenticated, anon;
 
--- 12.3 Operações de Rodada (Exclusivo Administradores Vinculados)
-REVOKE EXECUTE ON FUNCTION public.open_round(text, text) FROM public;
+REVOKE ALL ON FUNCTION public.has_event_access(text, uuid) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.has_event_access(text, uuid) TO authenticated, anon;
+
+REVOKE ALL ON FUNCTION public.is_admin() FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.is_admin() TO authenticated, anon;
+
+REVOKE ALL ON FUNCTION public.is_superadmin() FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.is_superadmin() TO authenticated, anon;
+
+-- Operações administrativas de rodadas
+REVOKE ALL ON FUNCTION public.open_round(text, text) FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION public.open_round(text, text) TO authenticated;
 
-REVOKE EXECUTE ON FUNCTION public.close_round(text, uuid) FROM public;
+REVOKE ALL ON FUNCTION public.close_round(text, uuid) FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION public.close_round(text, uuid) TO authenticated;
 
-REVOKE EXECUTE ON FUNCTION public.prepare_next_round(text, text) FROM public;
+REVOKE ALL ON FUNCTION public.prepare_next_round(text, text) FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION public.prepare_next_round(text, text) TO authenticated;
 
--- 12.4 Auditoria e Conciliação de Resultados
-REVOKE EXECUTE ON FUNCTION public.get_admin_results(text) FROM public;
+-- Resultados administrativos
+REVOKE ALL ON FUNCTION public.get_admin_results(text) FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION public.get_admin_results(text) TO authenticated;
 
-REVOKE EXECUTE ON FUNCTION public.reconcile_results(text, text) FROM public;
+REVOKE ALL ON FUNCTION public.reconcile_results(text, text) FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION public.reconcile_results(text, text) TO authenticated;
 
--- 12.5 Registro de Voto Oficial (Participantes Autenticados e Anônimos)
-REVOKE EXECUTE ON FUNCTION public.submit_vote(text, uuid, text, int, int, int) FROM public;
-GRANT EXECUTE ON FUNCTION public.submit_vote(text, uuid, text, int, int, int) TO authenticated, anon;
+-- Gestão administrativa de perfis
+REVOKE ALL ON FUNCTION public.admin_manage_profile(text, uuid, text, text, text, boolean) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.admin_manage_profile(text, uuid, text, text, text, boolean) TO authenticated;
+
+-- Submissão oficial de votos
+REVOKE ALL ON FUNCTION public.submit_vote(text, uuid, text, int, int, int) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.submit_vote(text, uuid, text, int, int, int) TO authenticated;
+
+-- =============================================================================
+-- 18. AUDITORIA FINAL ANTES DO COMMIT
+-- =============================================================================
+
+DO $$
+DECLARE
+  v_bad integer;
+BEGIN
+  -- 1. Confirma que todas as funções críticas são SECURITY DEFINER e têm search_path seguro normalizado
+  SELECT count(*)
+  INTO v_bad
+  FROM pg_proc p
+  WHERE p.oid IN (
+    'public.has_event_access(text)'::regprocedure,
+    'public.has_event_access(text,uuid)'::regprocedure,
+    'public.grant_event_access(text,uuid)'::regprocedure,
+    'public.revoke_event_access(text,uuid)'::regprocedure,
+    'public.open_round(text,text)'::regprocedure,
+    'public.close_round(text,uuid)'::regprocedure,
+    'public.prepare_next_round(text,text)'::regprocedure,
+    'public.get_admin_results(text)'::regprocedure,
+    'public.reconcile_results(text,text)'::regprocedure,
+    'public.submit_vote(text,uuid,text,integer,integer,integer)'::regprocedure,
+    'public.admin_manage_profile(text,uuid,text,text,text,boolean)'::regprocedure
+  )
+  AND (
+    p.prosecdef IS DISTINCT FROM true
+    OR NOT EXISTS (
+      SELECT 1
+      FROM unnest(COALESCE(p.proconfig, ARRAY[]::text[])) AS cfg
+      WHERE replace(cfg, ' ', '') = 'search_path=public,pg_temp'
+    )
+  );
+
+  IF v_bad > 0 THEN
+    RAISE EXCEPTION
+      'Auditoria final falhou: existem % funções críticas sem SECURITY DEFINER ou search_path seguro normalizado.', v_bad;
+  END IF;
+
+  -- 2. Confirma que RLS está habilitado em todas as tabelas protegidas
+  IF EXISTS (
+    SELECT 1
+    FROM pg_class c
+    JOIN pg_namespace n ON n.oid = c.relnamespace
+    WHERE n.nspname = 'public'
+      AND c.relname IN (
+        'votes',
+        'results',
+        'events',
+        'projects',
+        'rounds',
+        'event_admins'
+      )
+      AND c.relrowsecurity IS DISTINCT FROM true
+  ) THEN
+    RAISE EXCEPTION
+      'Auditoria final falhou: RLS não está habilitado em uma ou mais tabelas do sistema.';
+  END IF;
+
+  RAISE NOTICE 'Auditoria interna de pré-commit concluída com sucesso.';
+END;
+$$;
+
+-- Atualização atômica do cache de esquema do PostgREST
+-- Notificação enviada apenas se a transação for concluída e confirmada
+NOTIFY pgrst, 'reload schema';
 
 COMMIT;
+
+-- =============================================================================
+-- 19. CONSULTAS DE AUDITORIA PÓS-APLICAÇÃO
+-- EXECUTAR MANUALMENTE APÓS O COMMIT PARA HOMOLOGAÇÃO
+-- =============================================================================
+
+-- A. Auditoria das funções e permissões efetivas
+SELECT
+  p.proname AS function_name,
+  pg_get_function_identity_arguments(p.oid) AS signature,
+  pg_get_userbyid(p.proowner) AS owner,
+  p.prosecdef AS security_definer,
+  EXISTS (
+    SELECT 1
+    FROM aclexplode(
+      COALESCE(p.proacl, acldefault('f', p.proowner))
+    ) a
+    WHERE a.grantee = 0
+      AND a.privilege_type = 'EXECUTE'
+  ) AS public_has_execute,
+  has_function_privilege('anon', p.oid, 'EXECUTE')
+    AS anon_can_execute,
+  has_function_privilege('authenticated', p.oid, 'EXECUTE')
+    AS authenticated_can_execute,
+  p.proconfig AS function_settings
+FROM pg_proc p
+JOIN pg_namespace n ON n.oid = p.pronamespace
+WHERE n.nspname = 'public'
+  AND p.proname IN (
+    'grant_event_access',
+    'revoke_event_access',
+    'has_event_access',
+    'open_round',
+    'close_round',
+    'prepare_next_round',
+    'get_admin_results',
+    'reconcile_results',
+    'submit_vote',
+    'is_admin',
+    'is_superadmin',
+    'admin_manage_profile'
+  )
+ORDER BY p.proname;
+
+-- B. Auditoria de ativação do RLS nas tabelas
+SELECT
+  c.relname AS table_name,
+  c.relrowsecurity AS rls_enabled,
+  c.relforcerowsecurity AS force_rls
+FROM pg_class c
+JOIN pg_namespace n ON n.oid = c.relnamespace
+WHERE n.nspname = 'public'
+  AND c.relname IN (
+    'votes',
+    'results',
+    'events',
+    'projects',
+    'rounds',
+    'event_admins'
+  )
+ORDER BY c.relname;
+
+-- C. Auditoria das políticas ativas
+SELECT
+  schemaname,
+  tablename,
+  policyname,
+  permissive,
+  roles,
+  cmd,
+  qual,
+  with_check
+FROM pg_policies
+WHERE schemaname = 'public'
+  AND tablename IN (
+    'votes',
+    'results',
+    'events',
+    'projects',
+    'rounds',
+    'event_admins'
+  )
+ORDER BY tablename, policyname;
+
+-- D. Conferência de unicidade de votos
+SELECT
+  event_id,
+  project_id,
+  voter_id,
+  count(*) AS total_ocorrencias
+FROM public.votes
+GROUP BY event_id, project_id, voter_id
+HAVING count(*) > 1;
+
+-- E. Conferência dos agregados atuais preservados
+SELECT
+  event_id,
+  project_id,
+  total_votes,
+  average_innovation,
+  average_impact,
+  average_development,
+  average_general,
+  percentage,
+  popular_points
+FROM public.results
+ORDER BY event_id, project_id;
