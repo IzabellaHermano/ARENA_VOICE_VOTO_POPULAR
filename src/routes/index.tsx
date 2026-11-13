@@ -7,6 +7,7 @@ import AdminLayout from '@/components/layout/AdminLayout';
 import ProtectedRoute from '@/components/auth/ProtectedRoute';
 
 // Public Pages
+import HomePage from '@/pages/public/HomePage';
 import PublicVotingPage from '@/pages/public/PublicVotingPage';
 import WaitingPage from '@/pages/public/WaitingPage';
 import EvaluationPage from '@/pages/public/EvaluationPage';
@@ -23,8 +24,6 @@ import AdminSettingsPage from '@/pages/admin/AdminSettingsPage';
 import AdminUsersPage from '@/pages/admin/AdminUsersPage';
 import AdminQuestionsPage from '@/pages/admin/AdminQuestionsPage';
 
-import { DEFAULT_EVENT_ID } from '@/services/eventService';
-
 export const AppRoutes: React.FC = () => {
   return (
     <Routes>
@@ -38,8 +37,8 @@ export const AppRoutes: React.FC = () => {
         <Route path="/votar/:eventId" element={<PublicVotingPage />} />
         <Route path="/votar/:eventId/:projectId" element={<PublicVotingPage />} />
 
-        {/* Rotas de compatibilidade com versões anteriores e atalhos de QR Code */}
-        <Route path="/votar" element={<Navigate to={`/votar/${DEFAULT_EVENT_ID}`} replace />} />
+        {/* Rota Pública Principal do Voto Popular (Destino Oficial do QR Code) */}
+        <Route path="/votar" element={<HomePage />} />
         <Route path="/aguardando" element={<WaitingPage />} />
         <Route path="/avaliar" element={<EvaluationPage />} />
         <Route path="/confirmacao" element={<ConfirmationPage />} />
