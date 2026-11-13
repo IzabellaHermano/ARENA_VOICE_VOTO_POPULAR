@@ -15,10 +15,14 @@ import {
   Shield,
   Trash2,
   Power,
+  Trophy,
+  AlertTriangle,
+  Check,
 } from 'lucide-react';
 import { AdminActionButton } from '@/components/admin';
 import { AdminProfile } from '@/types/supabase';
 import { AdminUsersService, CreateAdminPayload } from '@/services/adminUsersService';
+import { EventService, EventSummary } from '@/services/eventService';
 import { useAdminAuth } from '@/hooks/useAdminAuth';
 
 export const AdminUsersPage: React.FC = () => {
@@ -31,6 +35,9 @@ export const AdminUsersPage: React.FC = () => {
   const [feedbackError, setFeedbackError] = useState<string | null>(null);
   const [feedbackSuccess, setFeedbackSuccess] = useState<string | null>(null);
 
+  // Mapeamento de atribuições de eventos (userId -> eventId[])
+  const [allAssignmentsMap, setAllAssignmentsMap] = useState<Record<string, string[]>>({});
+
   // Estado do Modal de Criação
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
   const [createName, setCreateName] = useState('');
@@ -40,13 +47,30 @@ export const AdminUsersPage: React.FC = () => {
   const [createActive, setCreateActive] = useState(true);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
-  // Carrega a lista de administradores
+  // Estado do Modal de Vínculo de Eventos
+  const [selectedAdminForEvents, setSelectedAdminForEvents] = useState<AdminProfile | null>(null);
+  const [availableEvents, setAvailableEvents] = useState<EventSummary[]>([]);
+  const [adminAssignedEventIds, setAdminAssignedEventIds] = useState<Set<string>>(new Set());
+  const [isLoadingEventsModal, setIsLoadingEventsModal] = useState(false);
+  const [eventActionLoading, setEventActionLoading] = useState<string | null>(null);
+  const [orphanWarningEvent, setOrphanWarningEvent] = useState<{ id: string; name: string } | null>(null);
+
+  // Carrega a lista de administradores e os vínculos existentes
   const loadAdmins = async () => {
     setIsLoading(true);
     setFeedbackError(null);
     try {
       const data = await AdminUsersService.listAdmins();
       setAdminsList(data);
+
+      // Carrega vínculos de eventos de todos os administradores
+      const assignments = await AdminUsersService.listEventAdmins();
+      const map: Record<string, string[]> = {};
+      assignments.forEach((asg) => {
+        if (!map[asg.userId]) map[asg.userId] = [];
+        map[asg.userId].push(asg.eventId);
+      });
+      setAllAssignmentsMap(map);
     } catch (err: any) {
       setFeedbackError(err.message || 'Falha ao carregar lista de administradores.');
     } finally {
@@ -112,6 +136,15 @@ export const AdminUsersPage: React.FC = () => {
       return;
     }
 
+    // Proteção: Não permite desativar o último superadmin do sistema
+    if (targetAdmin.role === 'superadmin' && targetAdmin.active) {
+      const superCount = await AdminUsersService.checkSuperadminCount();
+      if (superCount <= 1) {
+        setFeedbackError('Ação bloqueada: Não é permitido desativar o único Superadministrador ativo do sistema.');
+        return;
+      }
+    }
+
     setFeedbackError(null);
     setFeedbackSuccess(null);
     try {
@@ -133,6 +166,15 @@ export const AdminUsersPage: React.FC = () => {
       return;
     }
 
+    // Proteção: Não permite excluir o último superadmin do sistema
+    if (targetAdmin.role === 'superadmin') {
+      const superCount = await AdminUsersService.checkSuperadminCount();
+      if (superCount <= 1) {
+        setFeedbackError('Ação bloqueada: Não é permitido excluir o único Superadministrador do sistema.');
+        return;
+      }
+    }
+
     if (!window.confirm(`Tem certeza que deseja remover o administrador "${targetAdmin.name}"?`)) {
       return;
     }
@@ -145,6 +187,118 @@ export const AdminUsersPage: React.FC = () => {
       setAdminsList((prev) => prev.filter((adm) => adm.id !== targetAdmin.id));
     } catch (err: any) {
       setFeedbackError(err.message || 'Falha ao excluir administrador.');
+    }
+  };
+
+  // =========================================================================
+  // GESTÃO DE ATRIBUIÇÃO DE EVENTOS
+  // =========================================================================
+
+  const handleOpenEventModal = async (targetAdmin: AdminProfile) => {
+    setSelectedAdminForEvents(targetAdmin);
+    setIsLoadingEventsModal(true);
+    setOrphanWarningEvent(null);
+
+    try {
+      // 1. Carrega todos os eventos disponíveis
+      const events = await EventService.listEvents();
+      setAvailableEvents(events);
+
+      // 2. Carrega vínculos deste administrador
+      const assignments = await AdminUsersService.listEventAdmins(targetAdmin.id);
+      const assignedIds = new Set(assignments.map((a) => a.eventId));
+      setAdminAssignedEventIds(assignedIds);
+    } catch (err: any) {
+      setFeedbackError('Erro ao carregar permissões de eventos: ' + err.message);
+    } finally {
+      setIsLoadingEventsModal(false);
+    }
+  };
+
+  const handleCloseEventModal = () => {
+    setSelectedAdminForEvents(null);
+    setOrphanWarningEvent(null);
+    setEventActionLoading(null);
+  };
+
+  const handleGrantAccess = async (eventId: string, eventName: string) => {
+    if (!selectedAdminForEvents) return;
+
+    setEventActionLoading(eventId);
+    setFeedbackError(null);
+
+    try {
+      await AdminUsersService.grantEventAccess(eventId, selectedAdminForEvents.id);
+      setAdminAssignedEventIds((prev) => new Set([...prev, eventId]));
+
+      // Atualiza o mapa global de vínculos
+      setAllAssignmentsMap((prev) => {
+        const current = prev[selectedAdminForEvents.id] || [];
+        return {
+          ...prev,
+          [selectedAdminForEvents.id]: [...new Set([...current, eventId])],
+        };
+      });
+
+      setFeedbackSuccess(`Acesso ao evento "${eventName}" concedido para ${selectedAdminForEvents.name}.`);
+    } catch (err: any) {
+      setFeedbackError(err.message || 'Falha ao conceder acesso ao evento.');
+    } finally {
+      setEventActionLoading(null);
+    }
+  };
+
+  const handleRequestRevokeAccess = async (eventId: string, eventName: string) => {
+    if (!selectedAdminForEvents) return;
+
+    setEventActionLoading(eventId);
+
+    try {
+      // Checa se este é o único administrador deste evento
+      const count = await AdminUsersService.checkEventAdminCount(eventId);
+      if (count <= 1) {
+        // Alerta de evento órfão!
+        setOrphanWarningEvent({ id: eventId, name: eventName });
+        setEventActionLoading(null);
+        return;
+      }
+
+      // Executa revogação direta se houver outros administradores
+      await executeRevokeAccess(eventId, eventName);
+    } catch (err: any) {
+      setFeedbackError(err.message || 'Falha ao verificar administradores do evento.');
+      setEventActionLoading(null);
+    }
+  };
+
+  const executeRevokeAccess = async (eventId: string, eventName: string) => {
+    if (!selectedAdminForEvents) return;
+
+    setEventActionLoading(eventId);
+    setOrphanWarningEvent(null);
+
+    try {
+      await AdminUsersService.revokeEventAccess(eventId, selectedAdminForEvents.id);
+      setAdminAssignedEventIds((prev) => {
+        const next = new Set(prev);
+        next.delete(eventId);
+        return next;
+      });
+
+      // Atualiza o mapa global de vínculos
+      setAllAssignmentsMap((prev) => {
+        const current = prev[selectedAdminForEvents.id] || [];
+        return {
+          ...prev,
+          [selectedAdminForEvents.id]: current.filter((id) => id !== eventId),
+        };
+      });
+
+      setFeedbackSuccess(`Acesso ao evento "${eventName}" revogado com sucesso.`);
+    } catch (err: any) {
+      setFeedbackError(err.message || 'Falha ao revogar acesso ao evento.');
+    } finally {
+      setEventActionLoading(null);
     }
   };
 
@@ -308,22 +462,23 @@ export const AdminUsersPage: React.FC = () => {
               <tr>
                 <th className="py-3.5 px-4 sm:px-6">Usuário</th>
                 <th className="py-3.5 px-4 sm:px-6">Papel de Acesso</th>
+                <th className="py-3.5 px-4 sm:px-6 hidden sm:table-cell">Eventos Autorizados</th>
                 <th className="py-3.5 px-4 sm:px-6">Situação</th>
-                <th className="py-3.5 px-4 sm:px-6 hidden md:table-cell">Data de Cadastro</th>
+                <th className="py-3.5 px-4 sm:px-6 hidden lg:table-cell">Data de Cadastro</th>
                 <th className="py-3.5 px-4 sm:px-6 text-right">Ações</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-arena-border/50 text-gray-300">
               {isLoading ? (
                 <tr>
-                  <td colSpan={5} className="py-12 text-center text-gray-500">
+                  <td colSpan={6} className="py-12 text-center text-gray-500">
                     <RefreshCw className="w-6 h-6 animate-spin mx-auto text-arena-red mb-2" />
                     <span>Carregando administradores...</span>
                   </td>
                 </tr>
               ) : filteredAdmins.length === 0 ? (
                 <tr>
-                  <td colSpan={5} className="py-12 text-center text-gray-500">
+                  <td colSpan={6} className="py-12 text-center text-gray-500">
                     Nenhum administrador encontrado com os filtros aplicados.
                   </td>
                 </tr>
@@ -379,6 +534,29 @@ export const AdminUsersPage: React.FC = () => {
                         )}
                       </td>
 
+                      {/* Eventos Autorizados */}
+                      <td className="py-4 px-4 sm:px-6 hidden sm:table-cell">
+                        {adm.role === 'superadmin' ? (
+                          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold bg-arena-gold/15 text-arena-gold border border-arena-gold/30">
+                            <Trophy className="w-3.5 h-3.5" />
+                            <span>Global (Todos)</span>
+                          </span>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => handleOpenEventModal(adm)}
+                            className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-xl text-xs font-semibold bg-white/5 hover:bg-white/10 text-gray-200 border border-arena-border hover:border-arena-gold/50 transition-colors"
+                            title="Clique para gerenciar eventos vinculados"
+                          >
+                            <Trophy className="w-3.5 h-3.5 text-arena-gold" />
+                            <span>
+                              {allAssignmentsMap[adm.id]?.length || 0}{' '}
+                              {allAssignmentsMap[adm.id]?.length === 1 ? 'evento' : 'eventos'}
+                            </span>
+                          </button>
+                        )}
+                      </td>
+
                       {/* Situação */}
                       <td className="py-4 px-4 sm:px-6">
                         {adm.active ? (
@@ -395,7 +573,7 @@ export const AdminUsersPage: React.FC = () => {
                       </td>
 
                       {/* Data de Criação */}
-                      <td className="py-4 px-4 sm:px-6 hidden md:table-cell text-xs text-gray-400">
+                      <td className="py-4 px-4 sm:px-6 hidden lg:table-cell text-xs text-gray-400">
                         {adm.created_at
                           ? new Date(adm.created_at).toLocaleDateString('pt-BR', {
                               day: '2-digit',
@@ -409,6 +587,16 @@ export const AdminUsersPage: React.FC = () => {
                       <td className="py-4 px-4 sm:px-6 text-right">
                         {isSuperadmin && (
                           <div className="flex items-center justify-end gap-1.5">
+                            {/* Gerenciar Eventos Autorizados */}
+                            <button
+                              type="button"
+                              onClick={() => handleOpenEventModal(adm)}
+                              title="Gerenciar eventos autorizados"
+                              className="p-2 rounded-xl border border-arena-border text-arena-gold hover:border-arena-gold/50 hover:bg-arena-gold/10 transition-colors"
+                            >
+                              <Trophy className="w-4 h-4" />
+                            </button>
+
                             {/* Alternar Ativo/Inativo */}
                             <button
                               type="button"
@@ -637,6 +825,175 @@ export const AdminUsersPage: React.FC = () => {
                 </AdminActionButton>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* 7. Modal de Gerenciamento de Vínculo de Eventos */}
+      {selectedAdminForEvents && (
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="w-full max-w-2xl bg-arena-card border border-arena-border rounded-3xl p-6 sm:p-8 shadow-2xl relative max-h-[90vh] flex flex-col">
+            <button
+              type="button"
+              onClick={handleCloseEventModal}
+              className="absolute right-4 top-4 text-gray-400 hover:text-white p-1 rounded-lg hover:bg-white/10"
+            >
+              <X className="w-5 h-5" />
+            </button>
+
+            <div className="flex items-center gap-2.5 mb-1 text-arena-gold">
+              <Trophy className="w-5 h-5" />
+              <h3 className="text-lg font-black text-white">Eventos Autorizados</h3>
+            </div>
+
+            <div className="text-xs text-gray-400 mb-5 flex items-center gap-2">
+              <span>Administrador:</span>
+              <span className="font-bold text-white">{selectedAdminForEvents.name}</span>
+              <span className="text-gray-500 font-mono">({selectedAdminForEvents.email})</span>
+              <span className="px-2 py-0.5 rounded-full text-[10px] font-black uppercase bg-arena-blue/20 text-arena-blue border border-arena-blue/40">
+                {selectedAdminForEvents.role}
+              </span>
+            </div>
+
+            {/* Aviso de Superadmin com acesso irrestrito */}
+            {selectedAdminForEvents.role === 'superadmin' ? (
+              <div className="p-4 rounded-2xl bg-arena-gold/10 border border-arena-gold/30 text-arena-gold text-xs space-y-1 mb-4">
+                <div className="font-bold flex items-center gap-2">
+                  <ShieldCheck className="w-4 h-4" />
+                  <span>Acesso Global Automático</span>
+                </div>
+                <p className="text-gray-300">
+                  Superadministradores possuem autorização irrestrita no sistema para gerenciar, criar e auditar todos os eventos cadastrados.
+                </p>
+              </div>
+            ) : null}
+
+            {/* Aviso de Alerta de Evento Órfão */}
+            {orphanWarningEvent && (
+              <div className="p-4 rounded-2xl bg-amber-500/15 border border-amber-500/40 text-amber-200 text-xs space-y-2 mb-4 animate-fade-in">
+                <div className="font-bold flex items-center gap-2 text-amber-400">
+                  <AlertTriangle className="w-4 h-4" />
+                  <span>Atenção: Evento Ficará Sem Administrador</span>
+                </div>
+                <p>
+                  O evento <strong>"{orphanWarningEvent.name}"</strong> não possui nenhum outro administrador vinculado. Se revogar este acesso, nenhum operador ou administrador poderá gerenciar o evento até que um novo vínculo seja concedido.
+                </p>
+                <div className="flex items-center gap-2 pt-2">
+                  <button
+                    type="button"
+                    onClick={() => executeRevokeAccess(orphanWarningEvent.id, orphanWarningEvent.name)}
+                    className="px-3 py-1.5 rounded-xl bg-amber-500 hover:bg-amber-600 text-black font-bold text-xs"
+                  >
+                    Confirmar Revogação Mesmo Assim
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setOrphanWarningEvent(null)}
+                    className="px-3 py-1.5 rounded-xl bg-white/10 hover:bg-white/20 text-gray-200 font-bold text-xs"
+                  >
+                    Cancelar
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* Lista de Eventos com Status de Vínculo */}
+            <div className="flex-1 overflow-y-auto space-y-3 pr-1">
+              {isLoadingEventsModal ? (
+                <div className="py-12 text-center text-gray-500">
+                  <RefreshCw className="w-6 h-6 animate-spin mx-auto text-arena-gold mb-2" />
+                  <span>Carregando eventos do sistema...</span>
+                </div>
+              ) : availableEvents.length === 0 ? (
+                <div className="py-12 text-center text-gray-500">
+                  Nenhum evento cadastrado no sistema.
+                </div>
+              ) : (
+                availableEvents.map((ev) => {
+                  const eventId = ev.id || '';
+                  const isAssigned = adminAssignedEventIds.has(eventId);
+                  const isActionLoading = eventActionLoading === eventId;
+                  const isSuper = selectedAdminForEvents.role === 'superadmin';
+
+                  return (
+                    <div
+                      key={eventId}
+                      className={`p-4 rounded-2xl border transition-all flex flex-col sm:flex-row sm:items-center justify-between gap-3 ${
+                        isAssigned
+                          ? 'bg-arena-green/5 border-arena-green/30'
+                          : 'bg-arena-black/40 border-arena-border'
+                      }`}
+                    >
+                      <div className="space-y-1">
+                        <div className="flex items-center gap-2">
+                          <h4 className="text-sm font-bold text-white">{ev.name}</h4>
+                          <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
+                            ev.status === 'active'
+                              ? 'bg-arena-red/20 text-arena-red border border-arena-red/40'
+                              : 'bg-gray-800 text-gray-400'
+                          }`}>
+                            {ev.status === 'active' ? 'Ao Vivo' : ev.status === 'finished' ? 'Finalizado' : 'Em Preparação'}
+                          </span>
+                        </div>
+                        {ev.subtitle && (
+                          <p className="text-xs text-gray-400">{ev.subtitle}</p>
+                        )}
+                        <div className="text-[11px] text-gray-500 font-mono">
+                          ID: {eventId}
+                        </div>
+                      </div>
+
+                      <div className="flex items-center gap-2 self-end sm:self-auto shrink-0">
+                        {isSuper ? (
+                          <span className="inline-flex items-center gap-1 px-3 py-1.5 rounded-xl bg-arena-gold/15 text-arena-gold border border-arena-gold/30 text-xs font-bold">
+                            <Check className="w-3.5 h-3.5" />
+                            Acesso Ativo (Super)
+                          </span>
+                        ) : isAssigned ? (
+                          <button
+                            type="button"
+                            onClick={() => handleRequestRevokeAccess(eventId, ev.name)}
+                            disabled={isActionLoading}
+                            className="px-3.5 py-2 rounded-xl bg-arena-red/15 hover:bg-arena-red/25 text-arena-red border border-arena-red/40 text-xs font-bold transition-all flex items-center gap-1.5"
+                          >
+                            {isActionLoading ? (
+                              <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                            ) : (
+                              <X className="w-3.5 h-3.5" />
+                            )}
+                            <span>Revogar Acesso</span>
+                          </button>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => handleGrantAccess(eventId, ev.name)}
+                            disabled={isActionLoading}
+                            className="px-3.5 py-2 rounded-xl bg-arena-green/15 hover:bg-arena-green/25 text-arena-green border border-arena-green/40 text-xs font-bold transition-all flex items-center gap-1.5"
+                          >
+                            {isActionLoading ? (
+                              <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                            ) : (
+                              <Check className="w-3.5 h-3.5" />
+                            )}
+                            <span>Conceder Acesso</span>
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+
+            <div className="pt-4 border-t border-arena-border/60 mt-4 flex justify-end">
+              <button
+                type="button"
+                onClick={handleCloseEventModal}
+                className="px-5 py-2.5 rounded-xl bg-white/10 hover:bg-white/20 text-white text-xs font-bold"
+              >
+                Concluir
+              </button>
+            </div>
           </div>
         </div>
       )}

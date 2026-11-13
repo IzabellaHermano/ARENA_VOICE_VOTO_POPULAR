@@ -23,8 +23,8 @@ import {
 
 export const AdminEventsPage: React.FC = () => {
   const navigate = useNavigate();
-  const { isSuperadmin, isAdmin } = useAdminAuth();
-  const { selectEvent } = useAdminEvent();
+  const { adminUser, role, isSuperadmin, isAdmin } = useAdminAuth();
+  const { selectEvent, authorizationError, clearAuthorizationError } = useAdminEvent();
 
   const [events, setEvents] = useState<EventSummary[]>([]);
   const [isLoading, setIsLoading] = useState<boolean>(true);
@@ -44,7 +44,7 @@ export const AdminEventsPage: React.FC = () => {
   const [formBannerUrl, setFormBannerUrl] = useState<string>('');
   const [formStatus, setFormStatus] = useState<'draft' | 'active' | 'finished' | 'archived'>('draft');
 
-  // Monitora a lista de eventos em tempo real exclusivamente do Supabase
+  // Monitora a lista de eventos em tempo real exclusivamente do Supabase (filtrada pelo usuário)
   useEffect(() => {
     setIsLoading(true);
     const unsub = EventService.subscribeToEventsList(
@@ -56,11 +56,12 @@ export const AdminEventsPage: React.FC = () => {
         setIsLoading(false);
         console.error('Erro ao subscrever lista de eventos:', err);
         setErrorMessage(`Falha na sincronização de eventos: ${err.message}`);
-      }
+      },
+      adminUser?.uid ? { userId: adminUser.uid, role: role || undefined } : undefined
     );
 
     return () => unsub();
-  }, []);
+  }, [adminUser?.uid, role]);
 
   const openCreateModal = () => {
     setEditingEvent(null);
@@ -136,10 +137,12 @@ export const AdminEventsPage: React.FC = () => {
     }
   };
 
-  // Ação de entrada: estabelece o evento no contexto e direciona para os projetos
-  const handleEnterEvent = (eventId: string) => {
-    selectEvent(eventId);
-    navigate('/admin/projetos');
+  // Ação de entrada: valida permissão e estabelece o evento no contexto
+  const handleEnterEvent = async (eventId: string) => {
+    const success = await selectEvent(eventId);
+    if (success) {
+      navigate('/admin/projetos');
+    }
   };
 
   const getStatusBadge = (status: string) => {
@@ -193,8 +196,8 @@ export const AdminEventsPage: React.FC = () => {
           </p>
         </div>
 
-        {/* Botão + CRIAR NOVO EVENTO (Permitido para superadmin e admin) */}
-        {(isSuperadmin || isAdmin) && (
+        {/* Botão + CRIAR NOVO EVENTO (Permitido para superadmin) */}
+        {isSuperadmin && (
           <button
             type="button"
             onClick={openCreateModal}
@@ -205,6 +208,22 @@ export const AdminEventsPage: React.FC = () => {
           </button>
         )}
       </div>
+
+      {/* Banner de Erro de Autorização / Acesso Revogado */}
+      {authorizationError && (
+        <div className="p-4 rounded-2xl bg-arena-red/20 border border-arena-red/60 text-arena-red text-xs sm:text-sm flex items-center justify-between shadow-neon-glow animate-fade-in">
+          <div className="flex items-center gap-2.5">
+            <AlertCircle className="w-5 h-5 shrink-0" />
+            <span className="font-bold">{authorizationError}</span>
+          </div>
+          <button
+            onClick={clearAuthorizationError}
+            className="p-1 text-arena-red hover:bg-white/10 rounded-lg transition-colors"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+      )}
 
       {/* Mensagens de Sucesso e Erro */}
       {successMessage && (
@@ -233,12 +252,14 @@ export const AdminEventsPage: React.FC = () => {
             <Trophy className="w-8 h-8" />
           </div>
           <div>
-            <h3 className="text-lg font-black text-white">Nenhum evento localizado</h3>
+            <h3 className="text-lg font-black text-white">Nenhum evento disponível</h3>
             <p className="text-xs text-gray-400 mt-1 max-w-md mx-auto">
-              Você ainda não possui eventos cadastrados. Clique em "CRIAR NOVO EVENTO" para iniciar uma nova competição.
+              {isSuperadmin
+                ? 'Nenhum evento cadastrado no sistema. Clique em "CRIAR NOVO EVENTO" para iniciar.'
+                : 'Você ainda não possui eventos vinculados ao seu perfil administrativo. Solicite autorização ao Superadministrador.'}
             </p>
           </div>
-          {(isSuperadmin || isAdmin) && (
+          {isSuperadmin && (
             <button
               onClick={openCreateModal}
               className="px-4 py-2 rounded-xl bg-arena-red text-white text-xs font-bold"

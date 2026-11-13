@@ -160,9 +160,55 @@ function mapResultRow(row: any): ResultDocument {
 
 export const EventService = {
   /**
-   * Consulta a lista de todos os eventos com contagem de projetos
+   * Verifica se um usuário possui acesso a um evento específico
    */
-  async listEvents(): Promise<EventSummary[]> {
+  async hasUserEventAccess(eventId: string, userId: string, role?: string): Promise<boolean> {
+    if (!eventId || !userId) return false;
+
+    // Superadmin sempre tem acesso irrestrito
+    if (role === 'superadmin') return true;
+
+    if (isSupabaseConfigured) {
+      try {
+        // 1. Tenta verificar via RPC atômica segura (se implementada no Supabase)
+        const { data: rpcAccess, error: rpcErr } = await supabase.rpc('has_event_access', {
+          p_event_id: eventId,
+        });
+        if (!rpcErr && typeof rpcAccess === 'boolean') {
+          return rpcAccess;
+        }
+
+        // 2. Consulta direta na tabela public.event_admins
+        const { data, error } = await supabase
+          .from('event_admins')
+          .select('id')
+          .eq('event_id', eventId)
+          .eq('user_id', userId)
+          .maybeSingle();
+
+        if (!error && data) {
+          return true;
+        }
+
+        // Se a tabela event_admins ainda não existir (aguardando execução do patch SQL)
+        if (error && (error.code === '42P01' || error.message.includes('not find'))) {
+          return true;
+        }
+
+        return false;
+      } catch (err) {
+        console.warn('Erro ao verificar permissão do evento:', err);
+        return false;
+      }
+    }
+
+    return true;
+  },
+
+  /**
+   * Consulta a lista de eventos com contagem de projetos, respeitando o perfil do usuário
+   */
+  async listEvents(userContext?: { userId?: string; role?: string }): Promise<EventSummary[]> {
     if (!isSupabaseConfigured) {
       return [{
         id: DEFAULT_EVENT_ID,
@@ -187,6 +233,24 @@ export const EventService = {
       throw new Error(`Falha ao listar eventos no Supabase: ${error.message}`);
     }
 
+    // Se o usuário não for superadmin, filtra apenas os eventos aos quais foi atribuído
+    let authorizedEvents = events || [];
+    if (userContext?.userId && userContext.role !== 'superadmin') {
+      try {
+        const { data: assignments, error: eaError } = await supabase
+          .from('event_admins')
+          .select('event_id')
+          .eq('user_id', userContext.userId);
+
+        if (!eaError && assignments) {
+          const authorizedSet = new Set(assignments.map((a: any) => a.event_id));
+          authorizedEvents = authorizedEvents.filter((ev: any) => authorizedSet.has(ev.id));
+        }
+      } catch {
+        // Se a tabela não existir, mantém a lista do SELECT
+      }
+    }
+
     // Consulta contagem de projetos agrupada por evento
     const { data: projects } = await supabase
       .from('projects')
@@ -199,7 +263,7 @@ export const EventService = {
       }
     });
 
-    return (events || []).map((ev: any) => ({
+    return authorizedEvents.map((ev: any) => ({
       ...mapEventRow(ev),
       projectsCount: countMap[ev.id] || 0,
     }));
@@ -210,7 +274,8 @@ export const EventService = {
    */
   subscribeToEventsList(
     onUpdate: (events: EventSummary[]) => void,
-    onError?: (err: Error) => void
+    onError?: (err: Error) => void,
+    userContext?: { userId?: string; role?: string }
   ): Unsubscribe {
     if (!isSupabaseConfigured) {
       onUpdate([{
@@ -232,7 +297,7 @@ export const EventService = {
 
     const fetchAll = async () => {
       try {
-        const events = await this.listEvents();
+        const events = await this.listEvents(userContext);
         if (isSubscribed) {
           onUpdate(events);
         }
@@ -250,6 +315,9 @@ export const EventService = {
         if (isSubscribed) fetchAll();
       })
       .on('postgres_changes', { event: '*', schema: 'public', table: 'projects' }, () => {
+        if (isSubscribed) fetchAll();
+      })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'event_admins' }, () => {
         if (isSubscribed) fetchAll();
       })
       .subscribe((status) => {

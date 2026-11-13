@@ -87,3 +87,22 @@ export interface AdminProfileRow {
 
 export type AdminProfile = AdminProfileRow;
 
+export interface EventAdminRow {
+  id: string;
+  event_id: string;
+  user_id: string;
+  granted_by?: string | null;
+  created_at: string;
+}
+
+export interface EventAdminAssignment {
+  id: string;
+  eventId: string;
+  userId: string;
+  grantedBy?: string | null;
+  createdAt: string;
+  eventName?: string;
+  eventStatus?: string;
+}
+
+

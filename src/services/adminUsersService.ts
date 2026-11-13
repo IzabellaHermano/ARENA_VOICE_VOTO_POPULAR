@@ -1,5 +1,5 @@
 import { supabase, isSupabaseConfigured } from '@/supabase/client';
-import { AdminProfile } from '@/types/supabase';
+import { AdminProfile, EventAdminAssignment } from '@/types/supabase';
 
 export interface CreateAdminPayload {
   name: string;
@@ -250,6 +250,195 @@ export const AdminUsersService = {
     const localList = this.getLocalMockAdmins();
     const updated = localList.filter((u) => u.id !== userId);
     this.saveLocalMockAdmins(updated);
+  },
+
+  // =========================================================================
+  // GESTÃO DE VÍNCULOS: ADMINISTRADOR × EVENTO (public.event_admins)
+  // =========================================================================
+
+  /**
+   * Consulta os vínculos de administradores aos eventos
+   * Se userId for passado, filtra apenas os vínculos daquele administrador
+   */
+  async listEventAdmins(userId?: string): Promise<EventAdminAssignment[]> {
+    if (isSupabaseConfigured) {
+      try {
+        let query = supabase.from('event_admins').select('*');
+        if (userId) {
+          query = query.eq('user_id', userId);
+        }
+
+        const { data, error } = await query;
+        if (error) {
+          // Se a tabela ainda não existir no schema cache, retorna vazio
+          if (error.code === '42P01' || error.message.includes('not find')) {
+            console.warn('[event_admins] Tabela aguardando criação no Supabase.');
+            return [];
+          }
+          console.warn('Erro ao consultar event_admins:', error.message);
+          return [];
+        }
+
+        return (data || []).map((row: any) => ({
+          id: row.id,
+          eventId: row.event_id,
+          userId: row.user_id,
+          grantedBy: row.granted_by,
+          createdAt: row.created_at,
+        }));
+      } catch (err) {
+        console.warn('Exceção ao listar event_admins:', err);
+        return [];
+      }
+    }
+
+    return [];
+  },
+
+  /**
+   * Conta quantos superadmins ativos existem no sistema
+   * Usado para impedir remoção ou desativação acidental do último superadmin
+   */
+  async checkSuperadminCount(): Promise<number> {
+    if (isSupabaseConfigured) {
+      try {
+        const { count, error } = await supabase
+          .from('admin_profiles')
+          .select('id', { count: 'exact', head: true })
+          .eq('role', 'superadmin')
+          .eq('active', true);
+
+        if (!error && typeof count === 'number') {
+          return count;
+        }
+      } catch (err) {
+        console.warn('Erro ao contar superadmins:', err);
+      }
+    }
+
+    const localList = this.getLocalMockAdmins();
+    return localList.filter((u) => u.role === 'superadmin' && u.active).length;
+  },
+
+  /**
+   * Conta quantos administradores/operadores estão vinculados a um evento
+   */
+  async checkEventAdminCount(eventId: string): Promise<number> {
+    if (isSupabaseConfigured) {
+      try {
+        const { count, error } = await supabase
+          .from('event_admins')
+          .select('id', { count: 'exact', head: true })
+          .eq('event_id', eventId);
+
+        if (!error && typeof count === 'number') {
+          return count;
+        }
+      } catch (err) {
+        console.warn('Erro ao contar admins do evento:', err);
+      }
+    }
+
+    return 0;
+  },
+
+  /**
+   * Concede acesso de um administrador a um evento
+   */
+  async grantEventAccess(eventId: string, userId: string): Promise<{ success: boolean; assignmentId?: string }> {
+    if (!eventId || !userId) {
+      throw new Error('ID do evento e ID do usuário são obrigatórios.');
+    }
+
+    if (isSupabaseConfigured) {
+      // 1. Tenta via RPC atômica segura (se disponível)
+      try {
+        const { data: rpcData, error: rpcError } = await supabase.rpc('grant_event_access', {
+          p_event_id: eventId,
+          p_user_id: userId,
+        });
+
+        if (!rpcError && rpcData?.success) {
+          return { success: true, assignmentId: rpcData.assignment_id };
+        }
+      } catch {
+        // Fallback para inserção direta
+      }
+
+      // 2. Inserção direta via tabela public.event_admins
+      const { data, error } = await supabase
+        .from('event_admins')
+        .insert({
+          event_id: eventId,
+          user_id: userId,
+        })
+        .select('id')
+        .single();
+
+      if (error) {
+        if (error.code === '23505') {
+          // Registro já existe
+          return { success: true };
+        }
+        throw new Error(`Falha ao conceder acesso: ${error.message}`);
+      }
+
+      return { success: true, assignmentId: data?.id };
+    }
+
+    return { success: true };
+  },
+
+  /**
+   * Revoga acesso de um administrador a um evento
+   */
+  async revokeEventAccess(
+    eventId: string,
+    userId: string
+  ): Promise<{ success: boolean; willOrphanEvent: boolean; remainingAdmins: number }> {
+    if (!eventId || !userId) {
+      throw new Error('ID do evento e ID do usuário são obrigatórios.');
+    }
+
+    if (isSupabaseConfigured) {
+      // 1. Tenta via RPC atômica
+      try {
+        const { data: rpcData, error: rpcError } = await supabase.rpc('revoke_event_access', {
+          p_event_id: eventId,
+          p_user_id: userId,
+        });
+
+        if (!rpcError && rpcData?.success) {
+          return {
+            success: true,
+            willOrphanEvent: !!rpcData.will_orphan_event,
+            remainingAdmins: rpcData.remaining_admins ?? 0,
+          };
+        }
+      } catch {
+        // Fallback para delete direto
+      }
+
+      // 2. Verifica quantos admins restarão antes de deletar
+      const currentCount = await this.checkEventAdminCount(eventId);
+      const remainingAdmins = Math.max(0, currentCount - 1);
+      const willOrphanEvent = remainingAdmins === 0;
+
+      // Deleta da tabela public.event_admins
+      const { error } = await supabase
+        .from('event_admins')
+        .delete()
+        .eq('event_id', eventId)
+        .eq('user_id', userId);
+
+      if (error) {
+        throw new Error(`Falha ao revogar acesso: ${error.message}`);
+      }
+
+      return { success: true, willOrphanEvent, remainingAdmins };
+    }
+
+    return { success: true, willOrphanEvent: false, remainingAdmins: 1 };
   },
 
   // Helpers de persistência local
