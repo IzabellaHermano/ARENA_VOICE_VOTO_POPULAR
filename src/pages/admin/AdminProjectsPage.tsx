@@ -130,7 +130,7 @@ export const AdminProjectsPage: React.FC = () => {
         `Projeto "${project.nome}" ${nextActive ? 'ativado' : 'desativado'} com sucesso.`
       );
     } catch (err: unknown) {
-      console.error('Erro ao alternar status do projeto no Supabase:', err);
+      console.error('Erro ao alternar status do projeto:', err);
       const msg = err instanceof Error ? err.message : 'Falha ao alterar status do projeto.';
       setErrorMessage(msg);
     }
@@ -150,7 +150,7 @@ export const AdminProjectsPage: React.FC = () => {
           order: data.ordem,
           active: data.ativo,
         });
-        setSuccessMessage(`Projeto "${data.nome}" atualizado com sucesso no Supabase.`);
+        setSuccessMessage(`Projeto "${data.nome}" atualizado com sucesso.`);
       } else {
         // Criação de novo projeto oficial no Supabase para o evento ativo
         await EventService.createProject({
@@ -162,11 +162,11 @@ export const AdminProjectsPage: React.FC = () => {
           order: data.ordem,
           active: data.ativo ?? true,
         });
-        setSuccessMessage(`Projeto "${data.nome}" cadastrado com sucesso no Supabase.`);
+        setSuccessMessage(`Projeto "${data.nome}" cadastrado com sucesso.`);
       }
     } catch (err: unknown) {
-      console.error('Erro ao salvar projeto no Supabase:', err);
-      const msg = err instanceof Error ? err.message : 'Falha ao salvar dados no Supabase.';
+      console.error('Erro ao salvar projeto:', err);
+      const msg = err instanceof Error ? err.message : 'Falha ao salvar dados.';
       setErrorMessage(msg);
       throw err; // Repassa para o ProjectForm exibir no formulário
     }
@@ -213,7 +213,7 @@ export const AdminProjectsPage: React.FC = () => {
     setDeleteModalState((prev) => ({ ...prev, isDeleting: true }));
     try {
       await EventService.deleteProject(project.id, false);
-      setSuccessMessage(`Projeto "${project.nome}" excluído com sucesso do banco.`);
+      setSuccessMessage(`Projeto "${project.nome}" excluído com sucesso.`);
       setDeleteModalState({
         isOpen: false,
         project: null,
@@ -264,8 +264,8 @@ export const AdminProjectsPage: React.FC = () => {
       await EventService.openRound(activeEventId, selectedProjectId);
       navigate('/admin/votacao');
     } catch (err: unknown) {
-      console.error('Erro ao abrir rodada no Supabase:', err);
-      const msg = err instanceof Error ? err.message : 'Falha ao liberar rodada no servidor.';
+      console.error('Erro ao abrir rodada:', err);
+      const msg = err instanceof Error ? err.message : 'Falha ao liberar rodada.';
       setErrorMessage(msg);
     } finally {
       setIsOpening(false);
@@ -281,13 +281,13 @@ export const AdminProjectsPage: React.FC = () => {
         <div>
           <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-arena-blue/15 text-arena-blue border border-arena-blue/30 text-xs font-bold uppercase tracking-wider mb-2">
             <Sparkles className="w-3.5 h-3.5" />
-            <span>Gestão dos Participantes — Supabase</span>
+            <span>Gestão dos Participantes</span>
           </div>
           <h2 className="text-2xl sm:text-3xl font-black text-white">
             Projetos da Competição
           </h2>
           <p className="text-xs sm:text-sm text-gray-400 mt-1">
-            Cadastre, edite e gerencie os projetos reais persistidos no banco Supabase. Selecione o projeto ativo para liberar a rodada.
+            Cadastre, edite e gerencie os projetos. Selecione o projeto ativo para liberar a rodada.
           </p>
         </div>
 

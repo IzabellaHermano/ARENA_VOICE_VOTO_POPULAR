@@ -10,20 +10,28 @@
 --
 -- REGRAS E BLINDAGENS DESTE PATCH:
 -- 1. SIGILO ABSOLUTO DO VOTO (public.votes):
---    - Elimina "votes_select_own" e "votes_admin_all" que permitiam que admins vissem votos.
+--    - Eliminação dinâmica e irrestrita de TODAS as políticas legadas via pg_policies.
 --    - Aplica "votes_select_strict_own": ESTRITAMENTE o próprio votante (voter_id = auth.uid()).
---    - NENHUM administrador (nem Superadmin) tem permissão de SELECT em votos individuais de outros.
---    - REVOKE INSERT, UPDATE, DELETE na tabela votes para clientes (voto somente via submit_vote).
+--    - NENHUM administrador (nem Superadmin) tem permissão de SELECT em votos individuais de terceiros.
+--    - REVOKE ALL ON TABLE public.votes FROM public, anon, authenticated; GRANT SELECT TO authenticated.
+--    - Votos são gravados EXCLUSIVAMENTE via public.submit_vote() (SECURITY DEFINER).
 -- 2. SEGURANÇA DE RESULTADOS AGREGADOS (public.results):
---    - Elimina "results_select_public" (que permitia leitura pública antes da hora).
+--    - Eliminação dinâmica de políticas antigas.
 --    - Admins autorizados consultam resultados em tempo real para condução do evento.
---    - Público/Telão só lê resultados se results_published = true OU contador durante rodada open.
+--    - Público/Telão só lê resultados se results_published = true OU contador durante rodada open do projeto.
+--    - Sem exposição de dados pessoais ou identificadores de votantes.
 -- 3. ISOLAMENTO MULTI-EVENTO (public.events, projects, rounds):
---    - Cria public.event_admins e índices de performance.
+--    - Cria public.event_admins e índices de performance compostos.
 --    - Admin só lê e opera eventos, projetos e rodadas aos quais foi explicitamente vinculado.
 --    - Superadmin mantém acesso global administrativo.
---    - Procedures open_round, close_round e prepare_next_round validadas com has_event_access().
--- 4. PRESERVAÇÃO INTEGRAL:
+-- 4. PROCEDURES ATÔMICAS E BLINDADAS:
+--    - open_round, prepare_next_round, get_admin_results, reconcile_results com has_event_access().
+--    - close_round corrigida: valida existência, pertinência e status 'open' da rodada, limpando
+--      events.current_round_id SOMENTE se correspondia à rodada encerrada.
+--    - submit_vote validada: concorrência via lock compartilhado na rodada, lock exclusivo de linha
+--      em results, chave determinística única e bloqueio de notas fora de [1..5].
+--    - Todas com SECURITY DEFINER SET search_path = public, pg_temp e revogação explícita de EXECUTE para public.
+-- 5. PRESERVAÇÃO INTEGRAL:
 --    - Nenhuma tabela é dropada. Nenhum dado histórico de arena-voice-2026 é alterado ou excluído.
 -- ==============================================================================
 
@@ -223,7 +231,7 @@ begin
 end;
 $$;
 
--- 5.2 close_round com verificação has_event_access
+-- 5.2 close_round com verificação has_event_access e validações estritas
 CREATE OR REPLACE FUNCTION public.close_round(
   p_event_id text,
   p_round_id uuid default null
@@ -234,34 +242,79 @@ SET search_path = public, pg_temp
 AS $$
 declare
   v_event record;
+  v_round record;
+  v_target_round_id uuid;
   v_closed_round_id uuid;
 begin
+  -- 1. Verificação prévia de autorização do administrador no evento
   if not public.has_event_access(p_event_id) then
     raise exception 'Acesso negado: Você não possui permissão para administrar este evento.';
   end if;
 
+  -- 2. Lock transacional no registro do evento
   select * into v_event from public.events where id = p_event_id for update;
   if not found then
-    raise exception 'Evento % não encontrado.', p_event_id;
+    raise exception 'Evento "%" não encontrado.', p_event_id;
   end if;
 
+  -- 3. Identificação e validação rigorosa da rodada a encerrar
   if p_round_id is not null then
-    update public.rounds
-    set status = 'closed', ended_at = now(), closed_at = now(), updated_at = now()
-    where id = p_round_id and event_id = p_event_id and status = 'open'
-    returning id into v_closed_round_id;
+    -- 3.1 Se p_round_id informado: validar existência, pertinência e status
+    select * into v_round from public.rounds where id = p_round_id for update;
+    if not found then
+      raise exception 'Rodada "%" não encontrada.', p_round_id;
+    end if;
+
+    if v_round.event_id <> p_event_id then
+      raise exception 'A rodada "%" não pertence ao evento "%".', p_round_id, p_event_id;
+    end if;
+
+    if v_round.status <> 'open' then
+      raise exception 'A rodada "%" não pode ser encerrada pois não está aberta (status atual: "%").', p_round_id, v_round.status;
+    end if;
+
+    v_target_round_id := v_round.id;
   else
-    update public.rounds
-    set status = 'closed', ended_at = now(), closed_at = now(), updated_at = now()
+    -- 3.2 Se p_round_id não informado: localizar a rodada aberta do evento
+    select * into v_round from public.rounds
     where event_id = p_event_id and status = 'open'
-    returning id into v_closed_round_id;
+    order by started_at desc limit 1
+    for update;
+
+    if not found then
+      raise exception 'Não há nenhuma rodada aberta para o evento "%".', p_event_id;
+    end if;
+
+    v_target_round_id := v_round.id;
   end if;
 
-  update public.events
-  set current_round_id = null, updated_at = now()
-  where id = p_event_id;
+  -- 4. Encerramento atômico da rodada validada
+  update public.rounds
+  set status = 'closed',
+      ended_at = now(),
+      closed_at = now(),
+      updated_at = now()
+  where id = v_target_round_id
+  returning id into v_closed_round_id;
 
-  return json_build_object('success', true, 'round_id', coalesce(v_closed_round_id, p_round_id));
+  if v_closed_round_id is null then
+    raise exception 'Falha ao encerrar a rodada "%". Nenhuma linha foi atualizada.', v_target_round_id;
+  end if;
+
+  -- 5. Atualiza current_round_id no evento SOMENTE se correspondia à rodada encerrada
+  if v_event.current_round_id = v_closed_round_id then
+    update public.events
+    set current_round_id = null,
+        updated_at = now()
+    where id = p_event_id;
+  end if;
+
+  return json_build_object(
+    'success', true,
+    'round_id', v_closed_round_id,
+    'event_id', p_event_id,
+    'closed_at', now()
+  );
 end;
 $$;
 
@@ -422,22 +475,124 @@ begin
 end;
 $$;
 
+-- 5.6 submit_vote: Registro oficial e atômico do voto com cálculo agregado
+CREATE OR REPLACE FUNCTION public.submit_vote(
+  p_event_id text,
+  p_round_id uuid,
+  p_project_id text,
+  p_innovation int,
+  p_impact int,
+  p_development int
+) RETURNS json
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+declare
+  v_voter_id uuid;
+  v_round record;
+  v_event record;
+  v_vote_id text;
+  v_result_id text;
+begin
+  -- 1. Obter identidade do votante exclusivamente do contexto JWT
+  v_voter_id := auth.uid();
+  if v_voter_id is null then
+    raise exception 'Acesso não autenticado: Sessão do participante inválida ou expirada.';
+  end if;
+
+  -- 2. Validar notas entre 1 e 5
+  if p_innovation not between 1 and 5 or p_impact not between 1 and 5 or p_development not between 1 and 5 then
+    raise exception 'Notas inválidas: As notas devem ser valores inteiros entre 1 e 5.';
+  end if;
+
+  -- 3. Lock transacional compartilhado na rodada e validações de integridade
+  select * into v_round from public.rounds where id = p_round_id for share;
+  if not found or v_round.status <> 'open' then
+    raise exception 'A rodada de votação para este projeto não está aberta.';
+  end if;
+
+  if v_round.project_id <> p_project_id or v_round.event_id <> p_event_id then
+    raise exception 'Inconsistência de parâmetros: O projeto ou evento informado não corresponde à rodada ativa.';
+  end if;
+
+  -- 4. Validar se o evento existe e está ativo
+  select * into v_event from public.events where id = p_event_id;
+  if not found or v_event.status <> 'active' then
+    raise exception 'O evento "%" não está ativo para votação.', p_event_id;
+  end if;
+
+  v_vote_id := p_event_id || '_' || p_project_id || '_' || v_voter_id::text;
+  v_result_id := p_event_id || '_' || p_project_id;
+
+  -- 5. Inserir voto individual com chave única (bloqueio atômico de duplicidade)
+  begin
+    insert into public.votes (
+      id, event_id, project_id, round_id, voter_id, voter_uid,
+      innovation_score, cptm_impact_score, development_score,
+      innovation, impact, development
+    )
+    values (
+      v_vote_id, p_event_id, p_project_id, p_round_id, v_voter_id, v_voter_id,
+      p_innovation, p_impact, p_development,
+      p_innovation, p_impact, p_development
+    );
+  exception when unique_violation then
+    raise exception 'Voto duplicado: Você já avaliou este projeto neste evento.';
+  end;
+
+  -- 6. Atualização atômica na tabela public.results (lock exclusivo na linha via ON CONFLICT DO UPDATE)
+  insert into public.results (
+    id, event_id, project_id, total_votes, sum_innovation, sum_impact, sum_development,
+    average_innovation, average_impact, average_development, average_general, percentage, popular_points, updated_at
+  )
+  values (
+    v_result_id, p_event_id, p_project_id, 1, p_innovation, p_impact, p_development,
+    p_innovation, p_impact, p_development,
+    round(((p_innovation + p_impact + p_development) / 3.0), 2),
+    round((((p_innovation + p_impact + p_development) / 3.0) / 5.0) * 100.0, 2),
+    round((((p_innovation + p_impact + p_development) / 3.0) / 5.0) * 20.0, 2),
+    now()
+  )
+  on conflict (id) do update set
+    total_votes = public.results.total_votes + 1,
+    sum_innovation = public.results.sum_innovation + p_innovation,
+    sum_impact = public.results.sum_impact + p_impact,
+    sum_development = public.results.sum_development + p_development,
+    average_innovation = round((public.results.sum_innovation + p_innovation)::numeric / (public.results.total_votes + 1), 2),
+    average_impact = round((public.results.sum_impact + p_impact)::numeric / (public.results.total_votes + 1), 2),
+    average_development = round((public.results.sum_development + p_development)::numeric / (public.results.total_votes + 1), 2),
+    average_general = round((((public.results.sum_innovation + p_innovation + public.results.sum_impact + p_impact + public.results.sum_development + p_development)::numeric / 3.0) / (public.results.total_votes + 1)), 2),
+    percentage = round((((((public.results.sum_innovation + p_innovation + public.results.sum_impact + p_impact + public.results.sum_development + p_development)::numeric / 3.0) / (public.results.total_votes + 1)) / 5.0) * 100.0), 2),
+    popular_points = round((((((public.results.sum_innovation + p_innovation + public.results.sum_impact + p_impact + public.results.sum_development + p_development)::numeric / 3.0) / (public.results.total_votes + 1)) / 5.0) * 20.0), 2),
+    updated_at = now();
+
+  return json_build_object('success', true, 'vote_id', v_vote_id);
+end;
+$$;
+
 -- ------------------------------------------------------------------------------
 -- 6. BLINDAGEM DA TABELA public.votes (SIGILO ABSOLUTO DO VOTO)
 -- ------------------------------------------------------------------------------
 ALTER TABLE public.votes ENABLE ROW LEVEL SECURITY;
 
--- 6.1 Remove TODAS as políticas antigas ou permissivas
-DROP POLICY IF EXISTS "votes_select_own" ON public.votes;
-DROP POLICY IF EXISTS "votes_admin_all" ON public.votes;
-DROP POLICY IF EXISTS "votes_select_public" ON public.votes;
-DROP POLICY IF EXISTS "votes_select_strict_own" ON public.votes;
-DROP POLICY IF EXISTS "votes_insert_direct" ON public.votes;
-DROP POLICY IF EXISTS "votes_update_direct" ON public.votes;
-DROP POLICY IF EXISTS "votes_delete_direct" ON public.votes;
+-- 6.1 Remove TODAS as políticas de public.votes (conhecidas ou legadas) de forma dinâmica
+DO $$
+DECLARE
+  pol record;
+BEGIN
+  FOR pol IN (
+    SELECT policyname
+    FROM pg_policies
+    WHERE schemaname = 'public' AND tablename = 'votes'
+  ) LOOP
+    EXECUTE format('DROP POLICY IF EXISTS %I ON public.votes;', pol.policyname);
+  END LOOP;
+END;
+$$;
 
 -- 6.2 Política de Leitura ÚNICA: ESTRITAMENTE o próprio votante
--- Administradores NÃO podem ler votos de outros participantes.
+-- Administradores e Superadmins NÃO podem ler votos individuais de participantes.
 CREATE POLICY "votes_select_strict_own"
   ON public.votes
   FOR SELECT
@@ -448,7 +603,7 @@ CREATE POLICY "votes_select_strict_own"
 
 -- 6.3 Privilégios de Tabela: Revoga mutações diretas em votes para a API
 -- Votos são gravados EXCLUSIVAMENTE via public.submit_vote() (SECURITY DEFINER)
-REVOKE INSERT, UPDATE, DELETE ON TABLE public.votes FROM anon, authenticated, public;
+REVOKE ALL ON TABLE public.votes FROM public, anon, authenticated;
 GRANT SELECT ON TABLE public.votes TO authenticated;
 
 -- ------------------------------------------------------------------------------
@@ -456,11 +611,22 @@ GRANT SELECT ON TABLE public.votes TO authenticated;
 -- ------------------------------------------------------------------------------
 ALTER TABLE public.results ENABLE ROW LEVEL SECURITY;
 
--- Remove políticas antigas
-DROP POLICY IF EXISTS "results_select_public" ON public.results;
-DROP POLICY IF EXISTS "results_select_policy" ON public.results;
+-- 7.1 Remove TODAS as políticas de public.results de forma dinâmica
+DO $$
+DECLARE
+  pol record;
+BEGIN
+  FOR pol IN (
+    SELECT policyname
+    FROM pg_policies
+    WHERE schemaname = 'public' AND tablename = 'results'
+  ) LOOP
+    EXECUTE format('DROP POLICY IF EXISTS %I ON public.results;', pol.policyname);
+  END LOOP;
+END;
+$$;
 
--- Nova política de resultados agregados
+-- 7.2 Nova política de resultados agregados
 CREATE POLICY "results_select_policy"
   ON public.results
   FOR SELECT
@@ -483,20 +649,30 @@ CREATE POLICY "results_select_policy"
     )
   );
 
+REVOKE INSERT, UPDATE, DELETE ON TABLE public.results FROM anon, authenticated, public;
+GRANT SELECT ON TABLE public.results TO authenticated, anon;
+
 -- ------------------------------------------------------------------------------
 -- 8. BLINDAGEM DA TABELA public.events
 -- ------------------------------------------------------------------------------
 ALTER TABLE public.events ENABLE ROW LEVEL SECURITY;
 
-DROP POLICY IF EXISTS "events_select_public" ON public.events;
-DROP POLICY IF EXISTS "events_all_admin" ON public.events;
-DROP POLICY IF EXISTS "events_select_authorized" ON public.events;
-DROP POLICY IF EXISTS "events_select_policy" ON public.events;
-DROP POLICY IF EXISTS "events_admin_mutation" ON public.events;
-DROP POLICY IF EXISTS "events_superadmin_insert" ON public.events;
-DROP POLICY IF EXISTS "events_superadmin_delete" ON public.events;
+-- 8.1 Remove TODAS as políticas de public.events de forma dinâmica
+DO $$
+DECLARE
+  pol record;
+BEGIN
+  FOR pol IN (
+    SELECT policyname
+    FROM pg_policies
+    WHERE schemaname = 'public' AND tablename = 'events'
+  ) LOOP
+    EXECUTE format('DROP POLICY IF EXISTS %I ON public.events;', pol.policyname);
+  END LOOP;
+END;
+$$;
 
--- Leitura de Eventos
+-- 8.2 Leitura de Eventos
 CREATE POLICY "events_select_policy"
   ON public.events
   FOR SELECT
@@ -510,7 +686,7 @@ CREATE POLICY "events_select_policy"
     END
   );
 
--- Atualização de Eventos
+-- 8.3 Atualização de Eventos
 CREATE POLICY "events_admin_mutation"
   ON public.events
   FOR UPDATE
@@ -532,7 +708,7 @@ CREATE POLICY "events_admin_mutation"
     )
   );
 
--- Inserção e Exclusão de Eventos: Exclusivos de Superadmin
+-- 8.4 Inserção e Exclusão de Eventos: Exclusivos de Superadmin
 CREATE POLICY "events_superadmin_insert"
   ON public.events
   FOR INSERT
@@ -554,10 +730,20 @@ CREATE POLICY "events_superadmin_delete"
 -- ------------------------------------------------------------------------------
 ALTER TABLE public.projects ENABLE ROW LEVEL SECURITY;
 
-DROP POLICY IF EXISTS "projects_select_public" ON public.projects;
-DROP POLICY IF EXISTS "projects_all_admin" ON public.projects;
-DROP POLICY IF EXISTS "projects_select_policy" ON public.projects;
-DROP POLICY IF EXISTS "projects_admin_mutation" ON public.projects;
+-- 9.1 Remove TODAS as políticas de public.projects de forma dinâmica
+DO $$
+DECLARE
+  pol record;
+BEGIN
+  FOR pol IN (
+    SELECT policyname
+    FROM pg_policies
+    WHERE schemaname = 'public' AND tablename = 'projects'
+  ) LOOP
+    EXECUTE format('DROP POLICY IF EXISTS %I ON public.projects;', pol.policyname);
+  END LOOP;
+END;
+$$;
 
 CREATE POLICY "projects_select_policy"
   ON public.projects
@@ -595,9 +781,20 @@ CREATE POLICY "projects_admin_mutation"
 -- ------------------------------------------------------------------------------
 ALTER TABLE public.rounds ENABLE ROW LEVEL SECURITY;
 
-DROP POLICY IF EXISTS "rounds_select_public" ON public.rounds;
-DROP POLICY IF EXISTS "rounds_all_admin" ON public.rounds;
-DROP POLICY IF EXISTS "rounds_select_policy" ON public.rounds;
+-- 10.1 Remove TODAS as políticas de public.rounds de forma dinâmica
+DO $$
+DECLARE
+  pol record;
+BEGIN
+  FOR pol IN (
+    SELECT policyname
+    FROM pg_policies
+    WHERE schemaname = 'public' AND tablename = 'rounds'
+  ) LOOP
+    EXECUTE format('DROP POLICY IF EXISTS %I ON public.rounds;', pol.policyname);
+  END LOOP;
+END;
+$$;
 
 CREATE POLICY "rounds_select_policy"
   ON public.rounds
@@ -618,7 +815,21 @@ CREATE POLICY "rounds_select_policy"
 -- ------------------------------------------------------------------------------
 ALTER TABLE public.event_admins ENABLE ROW LEVEL SECURITY;
 
-DROP POLICY IF EXISTS "event_admins_select" ON public.event_admins;
+-- 11.1 Remove TODAS as políticas de public.event_admins de forma dinâmica
+DO $$
+DECLARE
+  pol record;
+BEGIN
+  FOR pol IN (
+    SELECT policyname
+    FROM pg_policies
+    WHERE schemaname = 'public' AND tablename = 'event_admins'
+  ) LOOP
+    EXECUTE format('DROP POLICY IF EXISTS %I ON public.event_admins;', pol.policyname);
+  END LOOP;
+END;
+$$;
+
 CREATE POLICY "event_admins_select"
   ON public.event_admins
   FOR SELECT
@@ -627,7 +838,6 @@ CREATE POLICY "event_admins_select"
     public.is_superadmin() OR user_id = auth.uid()
   );
 
-DROP POLICY IF EXISTS "event_admins_insert" ON public.event_admins;
 CREATE POLICY "event_admins_insert"
   ON public.event_admins
   FOR INSERT
@@ -636,7 +846,6 @@ CREATE POLICY "event_admins_insert"
     public.is_superadmin()
   );
 
-DROP POLICY IF EXISTS "event_admins_delete" ON public.event_admins;
 CREATE POLICY "event_admins_delete"
   ON public.event_admins
   FOR DELETE
@@ -675,5 +884,9 @@ GRANT EXECUTE ON FUNCTION public.get_admin_results(text) TO authenticated;
 
 REVOKE EXECUTE ON FUNCTION public.reconcile_results(text, text) FROM public;
 GRANT EXECUTE ON FUNCTION public.reconcile_results(text, text) TO authenticated;
+
+-- 12.5 Registro de Voto Oficial (Participantes Autenticados e Anônimos)
+REVOKE EXECUTE ON FUNCTION public.submit_vote(text, uuid, text, int, int, int) FROM public;
+GRANT EXECUTE ON FUNCTION public.submit_vote(text, uuid, text, int, int, int) TO authenticated, anon;
 
 COMMIT;
