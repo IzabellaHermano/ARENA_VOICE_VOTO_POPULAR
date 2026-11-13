@@ -14,6 +14,7 @@ import {
   UserCheck,
   Trophy,
   ArrowLeftRight,
+  HelpCircle,
 } from 'lucide-react';
 import { useAdminAuth } from '@/hooks/useAdminAuth';
 import { useAdminEvent } from '@/contexts/AdminEventContext';
@@ -36,6 +37,7 @@ export const AdminSidebar: React.FC<AdminSidebarProps> = ({ isOpen, onClose }) =
   const navItems = [
     { name: 'Meus Eventos', path: '/admin/eventos', icon: Trophy, requiresEvent: false },
     { name: 'Projetos', path: '/admin/projetos', icon: FolderKanban, requiresEvent: true },
+    { name: 'Perguntas e Critérios', path: '/admin/perguntas', icon: HelpCircle, requiresEvent: true },
     { name: 'Votação', path: '/admin/votacao', icon: Radio, requiresEvent: true },
     { name: 'Resultados', path: '/admin/resultados', icon: BarChart3, requiresEvent: true },
     {

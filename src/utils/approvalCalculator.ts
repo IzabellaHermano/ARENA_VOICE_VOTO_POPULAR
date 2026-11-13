@@ -41,6 +41,7 @@ export interface VoteScoreItem {
   cptm_impact_score?: number | null;
   development_score?: number | null;
   round_id?: string | null;
+  scores?: number[] | null;
 }
 
 export interface ApprovalStats {
@@ -57,14 +58,21 @@ export interface ApprovalStats {
 }
 
 /**
- * Classifica um voto individual baseado na média dos três critérios
+ * Classifica um voto individual baseado na média dos critérios avaliados
  */
 export function classifyVote(vote: VoteScoreItem): 'positive' | 'neutral' | 'negative' {
-  const inov = Number(vote.innovation ?? vote.innovation_score ?? 0);
-  const imp = Number(vote.impact ?? vote.cptm_impact_score ?? 0);
-  const dev = Number(vote.development ?? vote.development_score ?? 0);
+  let avg: number;
 
-  const avg = (inov + imp + dev) / 3;
+  if (vote.scores && Array.isArray(vote.scores) && vote.scores.length > 0) {
+    const sum = vote.scores.reduce((acc, s) => acc + Number(s || 0), 0);
+    avg = sum / vote.scores.length;
+  } else {
+    const inov = Number(vote.innovation ?? vote.innovation_score ?? 0);
+    const imp = Number(vote.impact ?? vote.cptm_impact_score ?? 0);
+    const dev = Number(vote.development ?? vote.development_score ?? 0);
+    avg = (inov + imp + dev) / 3;
+  }
+
   // Precisão com 2 casas decimais para neutralidade exata em 3.00
   const roundedAvg = Math.round(avg * 100) / 100;
 

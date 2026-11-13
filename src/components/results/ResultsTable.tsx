@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useMemo } from 'react';
 import { ProjectScoringResult } from '@/utils/scoring';
 import { Table as TableIcon } from 'lucide-react';
 
@@ -7,6 +7,24 @@ interface ResultsTableProps {
 }
 
 export const ResultsTable: React.FC<ResultsTableProps> = ({ results }) => {
+  // Extrai dinamicamente as colunas de critérios presentes nos resultados
+  const criteriaColumns = useMemo(() => {
+    const hasDynamic = results.some((r) => r.criteriaScores && r.criteriaScores.length > 0);
+    if (hasDynamic) {
+      const titles = new Set<string>();
+      results.forEach((r) => {
+        r.criteriaScores?.forEach((c) => titles.add(c.title));
+      });
+      return Array.from(titles);
+    }
+    return ['Inovação', 'Impacto CPTM', 'Salto Tecnol.'];
+  }, [results]);
+
+  const hasDynamic = useMemo(
+    () => results.some((r) => r.criteriaScores && r.criteriaScores.length > 0),
+    [results]
+  );
+
   return (
     <div className="bg-arena-card border border-arena-border rounded-2xl overflow-hidden shadow-xl space-y-3 p-4 sm:p-6">
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-arena-border/50 pb-3">
@@ -28,9 +46,11 @@ export const ResultsTable: React.FC<ResultsTableProps> = ({ results }) => {
               <th className="py-3 px-3 text-center w-16">Posição</th>
               <th className="py-3 px-4">Projeto</th>
               <th className="py-3 px-3 text-center">Votos Válidos</th>
-              <th className="py-3 px-3 text-center">Inovação</th>
-              <th className="py-3 px-3 text-center">Impacto CPTM</th>
-              <th className="py-3 px-3 text-center">Salto Tecnol.</th>
+              {criteriaColumns.map((col) => (
+                <th key={col} className="py-3 px-3 text-center">
+                  {col}
+                </th>
+              ))}
               <th className="py-3 px-3 text-center font-bold text-white bg-white/5">Média Geral</th>
               <th className="py-3 px-3 text-center">% dos 20%</th>
               <th className="py-3 px-4 text-center font-bold text-arena-gold bg-arena-gold/10">Pontos (20 pts)</th>
@@ -89,27 +109,38 @@ export const ResultsTable: React.FC<ResultsTableProps> = ({ results }) => {
                     {row.totalVotes}
                   </td>
 
-                  <td className="py-3.5 px-3 text-center font-mono">
-                    {row.formattedInnovation}
-                  </td>
-
-                  <td className="py-3.5 px-3 text-center font-mono">
-                    {row.formattedImpact}
-                  </td>
-
-                  <td className="py-3.5 px-3 text-center font-mono">
-                    {row.formattedDevelopment}
-                  </td>
+                  {hasDynamic ? (
+                    criteriaColumns.map((col) => {
+                      const found = row.criteriaScores?.find((c) => c.title === col);
+                      return (
+                        <td key={col} className="py-3.5 px-3 text-center font-mono">
+                          {found ? found.formatted : 'Sem avaliações'}
+                        </td>
+                      );
+                    })
+                  ) : (
+                    <>
+                      <td className="py-3.5 px-3 text-center font-mono">
+                        {row.formattedInnovation}
+                      </td>
+                      <td className="py-3.5 px-3 text-center font-mono">
+                        {row.formattedImpact}
+                      </td>
+                      <td className="py-3.5 px-3 text-center font-mono">
+                        {row.formattedDevelopment}
+                      </td>
+                    </>
+                  )}
 
                   <td className="py-3.5 px-3 text-center font-mono font-extrabold text-white bg-white/5">
                     {row.formattedGeneral}
                   </td>
 
-                  <td className="py-3.5 px-3 text-center font-mono text-arena-blueLight">
+                  <td className="py-3.5 px-3 text-center font-mono text-gray-300">
                     {row.formattedPercentage}
                   </td>
 
-                  <td className="py-3.5 px-4 text-center font-mono font-black text-sm text-arena-gold bg-arena-gold/10">
+                  <td className="py-3.5 px-4 text-center font-mono font-black text-arena-gold bg-arena-gold/10">
                     {row.formattedPoints}
                   </td>
                 </tr>
@@ -121,3 +152,5 @@ export const ResultsTable: React.FC<ResultsTableProps> = ({ results }) => {
     </div>
   );
 };
+
+export default ResultsTable;

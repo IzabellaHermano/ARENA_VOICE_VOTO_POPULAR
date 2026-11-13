@@ -20,6 +20,13 @@
 
 import type { ProjectDocument, ResultDocument } from '../types';
 
+export interface CriterionScoreItem {
+  id: string;
+  title: string;
+  average: number | null;
+  formatted: string;
+}
+
 export interface ProjectScoringResult {
   projectId: string;
   name: string;
@@ -29,6 +36,9 @@ export interface ProjectScoringResult {
   active: boolean;
   totalVotes: number;
   hasEvaluations: boolean;
+
+  // Critérios dinâmicos por evento (Etapa 3)
+  criteriaScores?: CriterionScoreItem[];
 
   // Valores brutos de ponto flutuante (precisão completa) ou null se sem votos
   rawInnovation: number | null;
@@ -131,14 +141,34 @@ export function calculateProjectScore(
   const rawImpact = sumImpact / totalVotes;
   const rawDevelopment = sumDevelopment / totalVotes;
 
-  // Média Geral = (Inovação + Impacto + Desenvolvimento) / 3
-  const rawGeneral = (rawInnovation + rawImpact + rawDevelopment) / 3;
+  // Critérios dinâmicos (se fornecidos pelo backend)
+  let criteriaScores: CriterionScoreItem[] | undefined = undefined;
+  if (resultDoc?.questionsMetrics && Array.isArray(resultDoc.questionsMetrics) && resultDoc.questionsMetrics.length > 0) {
+    criteriaScores = resultDoc.questionsMetrics.map((qm: any) => ({
+      id: qm.question_id || qm.id || '',
+      title: qm.title || 'Critério',
+      average: typeof qm.average_score === 'number' ? qm.average_score : null,
+      formatted: formatScore(qm.average_score),
+    }));
+  }
+
+  // Média Geral = soma de todas as notas válidas / quantidade total de respostas válidas
+  const rawGeneral =
+    resultDoc?.averageGeneral !== undefined && resultDoc.averageGeneral !== null
+      ? resultDoc.averageGeneral
+      : (rawInnovation + rawImpact + rawDevelopment) / 3;
 
   // Percentual = (Média Geral / 5) * 100
-  const rawPercentage = (rawGeneral / 5) * 100;
+  const rawPercentage =
+    resultDoc?.percentage !== undefined && resultDoc.percentage !== null
+      ? resultDoc.percentage
+      : (rawGeneral / 5) * 100;
 
   // Pontos do Voto Popular = (Média Geral / 5) * 20 (máximo 20 pontos)
-  const rawPoints = (rawGeneral / 5) * 20;
+  const rawPoints =
+    resultDoc?.popularPoints !== undefined && resultDoc.popularPoints !== null
+      ? resultDoc.popularPoints
+      : (rawGeneral / 5) * 20;
 
   return {
     projectId,
@@ -149,6 +179,7 @@ export function calculateProjectScore(
     active: project.active ?? true,
     totalVotes,
     hasEvaluations: true,
+    criteriaScores,
     rawInnovation,
     rawImpact,
     rawDevelopment,

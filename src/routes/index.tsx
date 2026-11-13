@@ -21,6 +21,7 @@ import AdminRoundPage from '@/pages/admin/AdminRoundPage';
 import AdminResultsPage from '@/pages/admin/AdminResultsPage';
 import AdminSettingsPage from '@/pages/admin/AdminSettingsPage';
 import AdminUsersPage from '@/pages/admin/AdminUsersPage';
+import AdminQuestionsPage from '@/pages/admin/AdminQuestionsPage';
 
 import { DEFAULT_EVENT_ID } from '@/services/eventService';
 
@@ -63,6 +64,8 @@ export const AppRoutes: React.FC = () => {
         <Route index element={<Navigate to="/admin/eventos" replace />} />
         <Route path="eventos" element={<AdminEventsPage />} />
         <Route path="projetos" element={<AdminProjectsPage />} />
+        <Route path="perguntas" element={<AdminQuestionsPage />} />
+        <Route path="criterios" element={<Navigate to="/admin/perguntas" replace />} />
         <Route path="votacao" element={<AdminRoundPage />} />
         <Route path="rodada" element={<Navigate to="/admin/votacao" replace />} />
         <Route path="resultados" element={<AdminResultsPage />} />

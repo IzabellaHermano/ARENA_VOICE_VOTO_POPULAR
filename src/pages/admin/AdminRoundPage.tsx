@@ -485,7 +485,7 @@ export const AdminRoundPage: React.FC = () => {
           </div>
           <div>
             <h4 className="text-base font-black text-white flex items-center gap-2">
-              <span>Telão Oficial 16:9</span>
+              <span>Telão Oficial</span>
               {roundStatus === 'aberta' && (
                 <span className="px-2.5 py-0.5 rounded-full bg-arena-red/20 text-arena-red text-[10px] font-black uppercase tracking-wider animate-pulse">
                   Ao Vivo no Palco
@@ -509,7 +509,7 @@ export const AdminRoundPage: React.FC = () => {
           rel="noopener noreferrer"
           className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-gradient-to-r from-arena-red to-[#B3050F] hover:from-[#FF1E27] hover:to-arena-red text-white text-xs font-black uppercase tracking-wider shadow-neon-glow transition-all shrink-0"
         >
-          <span>Abrir Telão (16:9)</span>
+          <span>Abrir Telão</span>
           <ExternalLink className="w-4 h-4" />
         </a>
       </div>

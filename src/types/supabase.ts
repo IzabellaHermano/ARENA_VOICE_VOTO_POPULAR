@@ -38,6 +38,7 @@ export interface RoundRow {
   ended_at: string | null;
   released_at?: string | null;
   closed_at?: string | null;
+  questions_snapshot?: any;
   created_at: string;
   updated_at: string;
 }
@@ -58,6 +59,15 @@ export interface VoteRow {
   created_at: string;
 }
 
+export interface QuestionMetric {
+  question_id: string;
+  title: string;
+  position: number;
+  total_answers: number;
+  sum_score: number;
+  average_score: number;
+}
+
 export interface ResultRow {
   id: string;
   event_id: string;
@@ -72,7 +82,52 @@ export interface ResultRow {
   average_general: number | null;
   percentage: number | null;
   popular_points: number | null;
+  questions_metrics?: QuestionMetric[];
   updated_at: string;
+}
+
+export interface EventQuestionRow {
+  id: string;
+  event_id: string;
+  title: string;
+  description: string;
+  position: number;
+  active: boolean;
+  required: boolean;
+  min_score: number;
+  max_score: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface EventQuestion {
+  id: string;
+  eventId: string;
+  title: string;
+  description: string;
+  position: number;
+  active: boolean;
+  required: boolean;
+  minScore: number;
+  maxScore: number;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export interface VoteAnswerRow {
+  id: string;
+  vote_id: string;
+  question_id: string;
+  score: number;
+  created_at: string;
+}
+
+export interface VoteAnswer {
+  id: string;
+  voteId: string;
+  questionId: string;
+  score: number;
+  createdAt?: string;
 }
 
 export interface AdminProfileRow {

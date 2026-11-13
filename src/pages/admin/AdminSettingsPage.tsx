@@ -408,7 +408,7 @@ export const AdminSettingsPage: React.FC = () => {
           <div className="p-3 rounded-xl bg-arena-gold/10 border border-arena-gold/30 text-arena-gold text-xs flex items-center gap-2.5">
             <AlertTriangle className="w-4 h-4 shrink-0" />
             <span>
-              Ações críticas (como exclusão de projetos ou alteração de notas) exigem autenticação administrativa válida via Supabase Auth e RLS no PostgreSQL.
+              Ações críticas (como exclusão de projetos ou alteração de notas) exigem autenticação administrativa.
             </span>
           </div>
         </div>
@@ -422,7 +422,7 @@ export const AdminSettingsPage: React.FC = () => {
             icon={<Save className="w-4 h-4" />}
             className="w-full sm:w-auto px-8 py-3.5"
           >
-            SALVAR CONFIGURAÇÕES NO SUPABASE
+            SALVAR CONFIGURAÇÕES
           </AdminActionButton>
         </div>
       </form>

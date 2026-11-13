@@ -2,7 +2,9 @@ import React, { useEffect, useState, useCallback, useMemo } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { AuthService } from '@/services/authService';
 import { EventService, DEFAULT_EVENT_ID } from '@/services/eventService';
+import { QuestionService } from '@/services/questionService';
 import { EventDocument, ProjectDocument, RoundDocument } from '@/types';
+import { EventQuestion } from '@/types/supabase';
 import { VotingContext, VotingContextType } from './VotingContext';
 
 export interface VotingProviderProps {
@@ -17,6 +19,7 @@ export const VotingProvider: React.FC<VotingProviderProps> = ({ children }) => {
   const [event, setEvent] = useState<EventDocument | null>(null);
   const [currentRound, setCurrentRound] = useState<RoundDocument | null>(null);
   const [currentProject, setCurrentProject] = useState<ProjectDocument | null>(null);
+  const [currentQuestions, setCurrentQuestions] = useState<EventQuestion[]>([]);
   const [hasVotedCurrentProject, setHasVotedCurrentProject] = useState<boolean>(false);
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
@@ -136,6 +139,35 @@ export const VotingProvider: React.FC<VotingProviderProps> = ({ children }) => {
     return () => unsubscribeProject();
   }, [activeProjectId]);
 
+  // 4.1 Carrega as perguntas ativas ou o snapshot da rodada
+  useEffect(() => {
+    const targetEventId = event?.id || DEFAULT_EVENT_ID;
+
+    // Se a rodada possui snapshot congelado de perguntas, utiliza-o
+    const snapshot = (currentRound as any)?.questions_snapshot;
+    if (snapshot && Array.isArray(snapshot) && snapshot.length > 0) {
+      setCurrentQuestions(
+        snapshot.map((q: any) => ({
+          id: q.id,
+          eventId: targetEventId,
+          title: q.title,
+          description: q.description || '',
+          position: q.position || 1,
+          active: true,
+          required: q.required ?? true,
+          minScore: q.min_score ?? 1,
+          maxScore: q.max_score ?? 5,
+        }))
+      );
+      return;
+    }
+
+    // Caso contrário, busca as perguntas ativas do evento
+    QuestionService.listQuestions(targetEventId, false).then((list) => {
+      setCurrentQuestions(list);
+    });
+  }, [event?.id, currentRound]);
+
   // 5. Verifica se o participante já votou no projeto em avaliação
   useEffect(() => {
     let isCancelled = false;
@@ -218,9 +250,14 @@ export const VotingProvider: React.FC<VotingProviderProps> = ({ children }) => {
     }
   }, [currentRound?.status, hasVotedCurrentProject, location.pathname, navigate]);
 
-  // 7. Envio oficial do voto com transação atômica no servidor
+  // 7. Envio oficial do voto com suporte a respostas dinâmicas e legadas
   const submitCurrentVote = useCallback(
-    async (scores: { innovation: number; impact: number; development: number }) => {
+    async (payload: {
+      answers?: Record<string, number>;
+      innovation?: number | null;
+      impact?: number | null;
+      development?: number | null;
+    }) => {
       if (!voterUid) {
         setErrorMessage('Sessão de usuário não identificada.');
         return;
@@ -244,19 +281,29 @@ export const VotingProvider: React.FC<VotingProviderProps> = ({ children }) => {
       setIsSubmitting(true);
       setErrorMessage(null);
 
+      const targetEventId = event?.id || DEFAULT_EVENT_ID;
+
       try {
+        const answersArray = payload.answers
+          ? Object.entries(payload.answers).map(([questionId, score]) => ({
+              questionId,
+              score,
+            }))
+          : undefined;
+
         // Chamada oficial à RPC submit_vote no Supabase
         await EventService.submitVote({
-          eventId: DEFAULT_EVENT_ID,
+          eventId: targetEventId,
           roundId: currentRound.id || event?.currentRoundId || '',
           projectId: activeProjectId,
-          innovation: scores.innovation,
-          impact: scores.impact,
-          development: scores.development,
+          answers: answersArray,
+          innovation: payload.innovation ?? (answersArray?.[0]?.score ?? 3),
+          impact: payload.impact ?? (answersArray?.[1]?.score ?? 3),
+          development: payload.development ?? (answersArray?.[2]?.score ?? 3),
         });
 
         // Marca localmente após confirmação formal do servidor
-        localStorage.setItem(`voted_${DEFAULT_EVENT_ID}_${activeProjectId}_${voterUid}`, 'true');
+        localStorage.setItem(`voted_${targetEventId}_${activeProjectId}_${voterUid}`, 'true');
         setHasVotedCurrentProject(true);
         if (location.pathname === '/avaliar') {
           navigate('/confirmacao');
@@ -272,7 +319,7 @@ export const VotingProvider: React.FC<VotingProviderProps> = ({ children }) => {
         setIsSubmitting(false);
       }
     },
-    [voterUid, currentRound, activeProjectId, event?.currentRoundId, location.pathname, navigate]
+    [voterUid, currentRound, activeProjectId, event?.id, event?.currentRoundId, location.pathname, navigate]
   );
 
   const clearError = useCallback(() => setErrorMessage(null), []);
@@ -283,6 +330,7 @@ export const VotingProvider: React.FC<VotingProviderProps> = ({ children }) => {
       event,
       currentRound,
       currentProject,
+      currentQuestions,
       hasVotedCurrentProject,
       isLoading,
       isSubmitting,
@@ -296,6 +344,7 @@ export const VotingProvider: React.FC<VotingProviderProps> = ({ children }) => {
       event,
       currentRound,
       currentProject,
+      currentQuestions,
       hasVotedCurrentProject,
       isLoading,
       isSubmitting,

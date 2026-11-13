@@ -77,6 +77,7 @@ export interface ResultDocument {
   averageGeneral: number | null;
   percentage: number | null;
   popularPoints: number | null;
+  questionsMetrics?: any[];
   updatedAt: Timestamp;
 }
 

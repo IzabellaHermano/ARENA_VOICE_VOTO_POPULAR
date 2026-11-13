@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useMemo } from 'react';
 import {
   ResponsiveContainer,
   BarChart,
@@ -16,18 +16,50 @@ interface CriteriaComparisonChartProps {
   projects: ProjectScoringResult[];
 }
 
+const CRITERIA_COLORS = ['#F20524', '#00B8F5', '#00E676', '#9C27B0', '#FF9800', '#E91E63', '#00BCD4'];
+
 export const CriteriaComparisonChart: React.FC<CriteriaComparisonChartProps> = ({ projects }) => {
+  // Identifica a lista de critérios (dinâmicos ou legados)
+  const hasDynamicCriteria = useMemo(
+    () => projects.some((p) => p.criteriaScores && p.criteriaScores.length > 0),
+    [projects]
+  );
+
+  const criteriaKeys = useMemo(() => {
+    if (hasDynamicCriteria) {
+      const keys = new Set<string>();
+      projects.forEach((p) => {
+        p.criteriaScores?.forEach((c) => keys.add(c.title));
+      });
+      return Array.from(keys);
+    }
+    return ['Inovação', 'Impacto', 'Desenvolvimento'];
+  }, [hasDynamicCriteria, projects]);
+
   // Filtra projetos avaliados para o gráfico
-  const data = projects
-    .filter((p) => p.hasEvaluations)
-    .map((p) => ({
-      name: p.name.length > 20 ? `${p.name.substring(0, 18)}...` : p.name,
-      fullName: p.name,
-      Inovação: p.rawInnovation ? Number(p.rawInnovation.toFixed(2)) : 0,
-      Impacto: p.rawImpact ? Number(p.rawImpact.toFixed(2)) : 0,
-      Desenvolvimento: p.rawDevelopment ? Number(p.rawDevelopment.toFixed(2)) : 0,
-      'Média Geral': p.rawGeneral ? Number(p.rawGeneral.toFixed(2)) : 0,
-    }));
+  const data = useMemo(() => {
+    return projects
+      .filter((p) => p.hasEvaluations)
+      .map((p) => {
+        const item: Record<string, any> = {
+          name: p.name.length > 20 ? `${p.name.substring(0, 18)}...` : p.name,
+          fullName: p.name,
+          'Média Geral': p.rawGeneral ? Number(p.rawGeneral.toFixed(2)) : 0,
+        };
+
+        if (p.criteriaScores && p.criteriaScores.length > 0) {
+          p.criteriaScores.forEach((c) => {
+            item[c.title] = c.average ? Number(c.average.toFixed(2)) : 0;
+          });
+        } else {
+          item['Inovação'] = p.rawInnovation ? Number(p.rawInnovation.toFixed(2)) : 0;
+          item['Impacto'] = p.rawImpact ? Number(p.rawImpact.toFixed(2)) : 0;
+          item['Desenvolvimento'] = p.rawDevelopment ? Number(p.rawDevelopment.toFixed(2)) : 0;
+        }
+
+        return item;
+      });
+  }, [projects]);
 
   if (data.length === 0) {
     return (
@@ -50,7 +82,9 @@ export const CriteriaComparisonChart: React.FC<CriteriaComparisonChartProps> = (
                 <span className="w-2 h-2 rounded-full" style={{ backgroundColor: entry.color }} />
                 {entry.name}:
               </span>
-              <span className="font-mono font-bold text-white">{entry.value.toFixed(1).replace('.', ',')}</span>
+              <span className="font-mono font-bold text-white">
+                {typeof entry.value === 'number' ? entry.value.toFixed(1).replace('.', ',') : '0,0'}
+              </span>
             </div>
           ))}
         </div>
@@ -68,7 +102,7 @@ export const CriteriaComparisonChart: React.FC<CriteriaComparisonChartProps> = (
             Comparação por Critério de Avaliação
           </h3>
           <p className="text-xs text-gray-400">
-            Escala oficial de 1 a 5 pontos por critério (pesos iguais de 33,3% cada na Média Geral).
+            Escala oficial de 1 a 5 pontos por critério configurado para o evento.
           </p>
         </div>
       </div>
@@ -99,9 +133,14 @@ export const CriteriaComparisonChart: React.FC<CriteriaComparisonChartProps> = (
               wrapperStyle={{ paddingTop: 10, fontSize: 11 }}
               formatter={(value) => <span className="text-gray-300 font-medium">{value}</span>}
             />
-            <Bar dataKey="Inovação" fill="#F20524" radius={[4, 4, 0, 0]} />
-            <Bar dataKey="Impacto" fill="#00B8F5" radius={[4, 4, 0, 0]} />
-            <Bar dataKey="Desenvolvimento" fill="#00E676" radius={[4, 4, 0, 0]} />
+            {criteriaKeys.map((key, index) => (
+              <Bar
+                key={key}
+                dataKey={key}
+                fill={CRITERIA_COLORS[index % CRITERIA_COLORS.length]}
+                radius={[4, 4, 0, 0]}
+              />
+            ))}
             <Bar dataKey="Média Geral" fill="#FFC400" radius={[4, 4, 0, 0]} />
           </BarChart>
         </ResponsiveContainer>
@@ -110,3 +149,4 @@ export const CriteriaComparisonChart: React.FC<CriteriaComparisonChartProps> = (
   );
 };
 
+export default CriteriaComparisonChart;

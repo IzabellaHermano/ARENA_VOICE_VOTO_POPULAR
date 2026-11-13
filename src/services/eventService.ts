@@ -17,9 +17,10 @@ export interface SubmitVotePayload {
   eventId: string;
   roundId: string;
   projectId: string;
-  innovation: number;
-  impact: number;
-  development: number;
+  innovation?: number;
+  impact?: number;
+  development?: number;
+  answers?: Array<{ questionId: string; score: number }>;
 }
 
 export interface CreateEventPayload {
@@ -1241,14 +1242,31 @@ export const EventService = {
    */
   async submitVote(payload: SubmitVotePayload) {
     if (isSupabaseConfigured) {
-      const { data, error } = await supabase.rpc('submit_vote', {
+      const rpcPayload: any = {
         p_event_id: payload.eventId,
         p_round_id: payload.roundId,
         p_project_id: payload.projectId,
-        p_innovation: payload.innovation,
-        p_impact: payload.impact,
-        p_development: payload.development,
-      });
+      };
+
+      if (payload.answers && payload.answers.length > 0) {
+        rpcPayload.p_answers = payload.answers.map((a) => ({
+          question_id: a.questionId,
+          score: a.score,
+        }));
+        // Também repassa scores para manter dualidade
+        const inno = payload.answers[0]?.score ?? payload.innovation ?? 3;
+        const imp = payload.answers[1]?.score ?? payload.impact ?? 3;
+        const dev = payload.answers[2]?.score ?? payload.development ?? 3;
+        rpcPayload.p_innovation = inno;
+        rpcPayload.p_impact = imp;
+        rpcPayload.p_development = dev;
+      } else {
+        rpcPayload.p_innovation = payload.innovation;
+        rpcPayload.p_impact = payload.impact;
+        rpcPayload.p_development = payload.development;
+      }
+
+      const { data, error } = await supabase.rpc('submit_vote', rpcPayload);
 
       if (error) {
         throw new Error(error.message);

@@ -1,17 +1,24 @@
 import { createContext } from 'react';
 import { EventDocument, ProjectDocument, RoundDocument } from '@/types';
+import { EventQuestion } from '@/types/supabase';
 
 export interface VotingContextType {
   voterUid: string | null;
   event: EventDocument | null;
   currentRound: RoundDocument | null;
   currentProject: ProjectDocument | null;
+  currentQuestions: EventQuestion[];
   hasVotedCurrentProject: boolean;
   isLoading: boolean;
   isSubmitting: boolean;
   connectionStatus: 'connected' | 'connecting' | 'reconnecting' | 'offline';
   errorMessage: string | null;
-  submitCurrentVote: (scores: { innovation: number; impact: number; development: number }) => Promise<void>;
+  submitCurrentVote: (payload: {
+    answers?: Record<string, number>;
+    innovation?: number | null;
+    impact?: number | null;
+    development?: number | null;
+  }) => Promise<void>;
   clearError: () => void;
 }
 

@@ -1,21 +1,85 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import { motion } from 'framer-motion';
 import { ArenaLogo } from '@/components/branding';
 import { ProjectBanner } from '@/components/ui';
 import { RatingSelector, VotingButton } from '@/components/voting';
 import { useVoting } from '@/hooks/useVoting';
-import { Lightbulb, TrendingUp, Rocket, Send, AlertCircle } from 'lucide-react';
+import { Lightbulb, TrendingUp, Rocket, Star, Send, AlertCircle, HelpCircle } from 'lucide-react';
 
 export const EvaluationPage: React.FC = () => {
-  const { currentProject, isSubmitting, errorMessage, submitCurrentVote, clearError } = useVoting();
+  const { currentProject, currentQuestions, isSubmitting, errorMessage, submitCurrentVote, clearError } =
+    useVoting();
 
-  // Estados dos três critérios oficiais (1 a 5, inicialmente nulos)
-  const [inovacao, setInovacao] = useState<number | null>(null);
-  const [impacto, setImpacto] = useState<number | null>(null);
-  const [salto, setSalto] = useState<number | null>(null);
+  // Perguntas ativas ordenadas por posição
+  const activeQuestions = useMemo(() => {
+    if (!currentQuestions || currentQuestions.length === 0) {
+      // Fallback padrão se ainda não tiver carregado
+      return [
+        {
+          id: 'q_default_inno',
+          title: 'Nível de Inovação',
+          description: 'Avalia a originalidade e a inovação da solução.',
+          position: 1,
+          active: true,
+          required: true,
+          minScore: 1,
+          maxScore: 5,
+        },
+        {
+          id: 'q_default_impact',
+          title: 'Impacto do Projeto na CPTM',
+          description: 'Avalia a contribuição do projeto para a companhia.',
+          position: 2,
+          active: true,
+          required: true,
+          minScore: 1,
+          maxScore: 5,
+        },
+        {
+          id: 'q_default_dev',
+          title: 'Salto de Desenvolvimento do Projeto',
+          description: 'Avalia a evolução apresentada pelo projeto.',
+          position: 3,
+          active: true,
+          required: true,
+          minScore: 1,
+          maxScore: 5,
+        },
+      ];
+    }
+    return [...currentQuestions].filter((q) => q.active).sort((a, b) => a.position - b.position);
+  }, [currentQuestions]);
 
-  // O botão AVALIAR só é habilitado quando os 3 critérios estiverem preenchidos
-  const isFormComplete = inovacao !== null && impacto !== null && salto !== null;
+  // Respostas individuais mapeadas por id da pergunta
+  const [answers, setAnswers] = useState<Record<string, number>>({});
+
+  // O formulário só está completo quando todas as perguntas ativas/obrigatórias tiverem nota de 1 a 5
+  const isFormComplete = useMemo(() => {
+    if (activeQuestions.length === 0) return false;
+    return activeQuestions.every((q) => {
+      const val = answers[q.id];
+      return typeof val === 'number' && val >= 1 && val <= 5;
+    });
+  }, [activeQuestions, answers]);
+
+  // Ícones rotativos para critérios
+  const getCriterionIcon = (index: number) => {
+    const icons = [
+      <Lightbulb key="inno" className="w-4 h-4 text-arena-gold" />,
+      <TrendingUp key="impact" className="w-4 h-4 text-arena-blue" />,
+      <Rocket key="dev" className="w-4 h-4 text-arena-red" />,
+      <Star key="star" className="w-4 h-4 text-amber-400" />,
+      <HelpCircle key="help" className="w-4 h-4 text-purple-400" />,
+    ];
+    return icons[index % icons.length];
+  };
+
+  const handleScoreChange = (questionId: string, val: number) => {
+    setAnswers((prev) => ({
+      ...prev,
+      [questionId]: val,
+    }));
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -23,16 +87,18 @@ export const EvaluationPage: React.FC = () => {
 
     clearError();
 
+    // Mapeia para o envio oficial com suporte dual (dinâmico e compatibilidade legada)
     await submitCurrentVote({
-      innovation: inovacao,
-      impact: impacto,
-      development: salto,
+      answers,
+      innovation: answers['q_default_inno'] || Object.values(answers)[0] || 3,
+      impact: answers['q_default_impact'] || Object.values(answers)[1] || 3,
+      development: answers['q_default_dev'] || Object.values(answers)[2] || 3,
     });
   };
 
   return (
     <div className="flex-1 flex flex-col justify-between py-1 sm:py-2">
-      {/* 1. Header: Logo Oficial adaptada ao espaço */}
+      {/* 1. Header: Logo Oficial adaptada */}
       <motion.div
         initial={{ opacity: 0, y: -4 }}
         animate={{ opacity: 1, y: 0 }}
@@ -54,7 +120,7 @@ export const EvaluationPage: React.FC = () => {
         </div>
       )}
 
-      {/* 2. Formulário de Avaliação em Tempo Real */}
+      {/* 2. Formulário Dinâmico de Avaliação */}
       <form onSubmit={handleSubmit} className="flex-1 flex flex-col justify-between space-y-3 sm:space-y-4 my-2">
         {/* Banner do Projeto Ativo no Palco */}
         <ProjectBanner
@@ -64,37 +130,19 @@ export const EvaluationPage: React.FC = () => {
           bannerUrl={currentProject?.bannerUrl}
         />
 
-        {/* 3 Critérios Oficiais */}
+        {/* Lista Dinâmica de Critérios de Avaliação do Evento */}
         <div className="space-y-3">
-          {/* Critério 1: Nível de Inovação */}
-          <RatingSelector
-            id="inovacao"
-            title="Nível de Inovação"
-            description="Avalia a originalidade e a inovação da solução."
-            icon={<Lightbulb className="w-4 h-4 text-arena-gold" />}
-            value={inovacao}
-            onChange={(val) => setInovacao(val)}
-          />
-
-          {/* Critério 2: Impacto do Projeto na CPTM */}
-          <RatingSelector
-            id="impacto"
-            title="Impacto do Projeto na CPTM"
-            description="Avalia a contribuição do projeto para a companhia."
-            icon={<TrendingUp className="w-4 h-4 text-arena-blue" />}
-            value={impacto}
-            onChange={(val) => setImpacto(val)}
-          />
-
-          {/* Critério 3: Salto de Desenvolvimento do Projeto */}
-          <RatingSelector
-            id="salto"
-            title="Salto de Desenvolvimento do Projeto"
-            description="Avalia a evolução apresentada pelo projeto."
-            icon={<Rocket className="w-4 h-4 text-arena-red" />}
-            value={salto}
-            onChange={(val) => setSalto(val)}
-          />
+          {activeQuestions.map((q, index) => (
+            <RatingSelector
+              key={q.id}
+              id={q.id}
+              title={q.title}
+              description={q.description || 'Selecione uma nota de 1 a 5 para este critério.'}
+              icon={getCriterionIcon(index)}
+              value={answers[q.id] ?? null}
+              onChange={(val) => handleScoreChange(q.id, val)}
+            />
+          ))}
         </div>
 
         {/* 3. Botão AVALIAR */}
@@ -112,7 +160,7 @@ export const EvaluationPage: React.FC = () => {
 
           {!isFormComplete && (
             <p className="text-center text-[10px] text-gray-400">
-              Selecione uma nota de 1 a 5 nos 3 critérios para enviar seu voto.
+              Selecione uma nota de 1 a 5 em todos os {activeQuestions.length} critérios para enviar seu voto.
             </p>
           )}
         </div>
