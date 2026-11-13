@@ -3,7 +3,8 @@ import { useNavigate } from 'react-router-dom';
 import { ArenaLogo } from '@/components/branding';
 import { EventService, DEFAULT_EVENT_ID } from '@/services/eventService';
 import { useAdminEvent } from '@/contexts/AdminEventContext';
-import { ProjectDocument, ResultDocument, EventDocument } from '@/types';
+import { ProjectDocument, ResultDocument, EventDocument, EventSettings } from '@/types';
+import { SettingsService } from '@/services/settingsService';
 import { buildRankedResults, ProjectScoringResult } from '@/utils/scoring';
 import {
   PublishResultsBanner,
@@ -42,6 +43,13 @@ export const AdminResultsPage: React.FC = () => {
   const [isUpdatingPublish, setIsUpdatingPublish] = useState(false);
   const [isExportModalOpen, setIsExportModalOpen] = useState(false);
   const [activeTab, setActiveTab] = useState<'cards' | 'charts' | 'table'>('cards');
+  const [eventSettings, setEventSettings] = useState<EventSettings | null>(null);
+
+  // Carrega configurações do evento ativo
+  useEffect(() => {
+    if (!activeEventId) return;
+    SettingsService.getSettings(activeEventId).then(setEventSettings).catch(console.warn);
+  }, [activeEventId]);
 
   // 1. Escuta o evento em tempo real (para status de publicação resultsPublished)
   useEffect(() => {
@@ -82,8 +90,8 @@ export const AdminResultsPage: React.FC = () => {
     resultsList.forEach((r) => {
       resultsMap.set(r.projectId, r);
     });
-    return buildRankedResults(projects, resultsMap);
-  }, [projects, resultsList]);
+    return buildRankedResults(projects, resultsMap, eventSettings?.popularVoteWeight ?? 20);
+  }, [projects, resultsList, eventSettings?.popularVoteWeight]);
 
   // Estatísticas Rápidas
   const totalVotesCount = useMemo(() => {
@@ -193,7 +201,9 @@ export const AdminResultsPage: React.FC = () => {
         <div className="p-4 rounded-2xl bg-arena-card border border-arena-border">
           <span className="text-[11px] font-semibold uppercase text-gray-400">Peso no Evento</span>
           <div className="flex items-baseline justify-between mt-1">
-            <span className="text-2xl font-black text-emerald-400 font-mono">20%</span>
+            <span className="text-2xl font-black text-emerald-400 font-mono">
+              {eventSettings?.popularVoteWeight ?? 20}%
+            </span>
             <span className="text-xs text-gray-400 font-semibold">Voto Popular</span>
           </div>
         </div>

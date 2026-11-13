@@ -161,11 +161,18 @@ export const BigScreenPresentationPage: React.FC = () => {
     return () => clearInterval(interval);
   }, [activeRound?.status, activeRound?.startedAt, activeRound?.endedAt]);
 
-  // Cálculo do tempo restante em contagem regressiva
+  // Cálculo do tempo restante em contagem regressiva sincronizada
+  const effectiveRoundDuration = useMemo(() => {
+    if (activeRound?.durationSeconds) {
+      return activeRound.durationSeconds;
+    }
+    return configuredDuration;
+  }, [activeRound?.durationSeconds, configuredDuration]);
+
   const remainingSeconds = useMemo(() => {
-    if (!activeRound?.startedAt) return configuredDuration;
-    return Math.max(0, configuredDuration - elapsedSeconds);
-  }, [configuredDuration, elapsedSeconds, activeRound?.startedAt]);
+    if (!activeRound?.startedAt) return effectiveRoundDuration;
+    return Math.max(0, effectiveRoundDuration - elapsedSeconds);
+  }, [effectiveRoundDuration, elapsedSeconds, activeRound?.startedAt]);
 
   const isUrgentTimer = activeRound?.status === 'open' && remainingSeconds <= 10 && remainingSeconds > 0;
 

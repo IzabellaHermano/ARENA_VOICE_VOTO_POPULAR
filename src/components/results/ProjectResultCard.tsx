@@ -7,6 +7,8 @@ interface ProjectResultCardProps {
 }
 
 export const ProjectResultCard: React.FC<ProjectResultCardProps> = ({ project }) => {
+  const cardWeight = project.popularVoteWeight ?? 20;
+
   const getRankBadge = () => {
     if (project.rank === null) {
       return (
@@ -119,12 +121,12 @@ export const ProjectResultCard: React.FC<ProjectResultCardProps> = ({ project })
               <div className="p-2 rounded-xl bg-white/5 border border-white/5">
                 <span className="block text-[10px] text-gray-400 font-semibold uppercase">Percentual</span>
                 <span className="text-base sm:text-lg font-black text-arena-blueLight">{project.formattedPercentage}</span>
-                <span className="block text-[9px] text-gray-500">dos 20%</span>
+                <span className="block text-[9px] text-gray-500">dos {cardWeight}%</span>
               </div>
               <div className="p-2 rounded-xl bg-gradient-to-b from-arena-gold/15 to-transparent border border-arena-gold/30">
                 <span className="block text-[10px] text-arena-gold font-bold uppercase">Nota Voto Pop.</span>
                 <span className="text-base sm:text-lg font-black text-arena-gold">{project.formattedPoints}</span>
-                <span className="block text-[9px] text-arena-gold/70">máx 20 pts</span>
+                <span className="block text-[9px] text-arena-gold/70">máx {cardWeight} pts</span>
               </div>
             </div>
 

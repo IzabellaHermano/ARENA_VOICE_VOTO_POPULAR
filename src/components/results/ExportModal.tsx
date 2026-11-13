@@ -8,6 +8,7 @@ interface ExportModalProps {
   onClose: () => void;
   results: ProjectScoringResult[];
   eventName?: string;
+  popularVoteWeight?: number;
 }
 
 export const ExportModal: React.FC<ExportModalProps> = ({
@@ -15,8 +16,10 @@ export const ExportModal: React.FC<ExportModalProps> = ({
   onClose,
   results,
   eventName = 'Arena Voice 2026',
+  popularVoteWeight,
 }) => {
   if (!isOpen) return null;
+  const effectiveWeight = popularVoteWeight ?? results[0]?.popularVoteWeight ?? 20;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-fade-in">
@@ -37,7 +40,7 @@ export const ExportModal: React.FC<ExportModalProps> = ({
             Exportar Resultados Oficiais
           </h3>
           <p className="text-xs text-gray-400">
-            Selecione o formato para download dos dados consolidados do Voto Popular (20%).
+            Selecione o formato para download dos dados consolidados do Voto Popular ({effectiveWeight}%).
           </p>
         </div>
 

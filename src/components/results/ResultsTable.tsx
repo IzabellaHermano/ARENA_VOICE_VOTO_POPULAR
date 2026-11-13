@@ -7,6 +7,8 @@ interface ResultsTableProps {
 }
 
 export const ResultsTable: React.FC<ResultsTableProps> = ({ results }) => {
+  const effectiveWeight = results[0]?.popularVoteWeight ?? 20;
+
   // Extrai dinamicamente as colunas de critérios presentes nos resultados
   const criteriaColumns = useMemo(() => {
     const hasDynamic = results.some((r) => r.criteriaScores && r.criteriaScores.length > 0);
@@ -34,7 +36,7 @@ export const ResultsTable: React.FC<ResultsTableProps> = ({ results }) => {
             Tabela Detalhada de Indicadores e Pontuação
           </h3>
           <p className="text-xs text-gray-400">
-            Cálculo oficial de 20% da nota do evento com uma casa decimal e auditoria completa.
+            Cálculo oficial de {effectiveWeight}% da nota do evento com uma casa decimal e auditoria completa.
           </p>
         </div>
       </div>
@@ -52,8 +54,8 @@ export const ResultsTable: React.FC<ResultsTableProps> = ({ results }) => {
                 </th>
               ))}
               <th className="py-3 px-3 text-center font-bold text-white bg-white/5">Média Geral</th>
-              <th className="py-3 px-3 text-center">% dos 20%</th>
-              <th className="py-3 px-4 text-center font-bold text-arena-gold bg-arena-gold/10">Pontos (20 pts)</th>
+              <th className="py-3 px-3 text-center">% dos {effectiveWeight}%</th>
+              <th className="py-3 px-4 text-center font-bold text-arena-gold bg-arena-gold/10">Pontos ({effectiveWeight} pts)</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-arena-border/50 text-gray-200">

@@ -38,6 +38,7 @@ export interface RoundRow {
   ended_at: string | null;
   released_at?: string | null;
   closed_at?: string | null;
+  duration_seconds?: number;
   questions_snapshot?: any;
   created_at: string;
   updated_at: string;
@@ -82,6 +83,7 @@ export interface ResultRow {
   average_general: number | null;
   percentage: number | null;
   popular_points: number | null;
+  popular_vote_weight?: number | null;
   questions_metrics?: QuestionMetric[];
   updated_at: string;
 }
@@ -159,5 +161,49 @@ export interface EventAdminAssignment {
   eventName?: string;
   eventStatus?: string;
 }
+
+export interface EventSettingsRow {
+  event_id: string;
+  default_round_duration: number; // 10 to 3600 seconds
+  popular_vote_weight: number; // 0.00 to 100.00 percent
+  show_realtime_screen: boolean;
+  created_at: string;
+  updated_at: string;
+  updated_by?: string | null;
+}
+
+export interface EventSettings {
+  eventId: string;
+  defaultRoundDuration: number;
+  popularVoteWeight: number;
+  showRealtimeScreen: boolean;
+  createdAt?: string;
+  updatedAt?: string;
+  updatedBy?: string | null;
+}
+
+export interface EventSettingsHistoryRow {
+  id: string;
+  event_id: string;
+  setting_key: string;
+  old_value: string | null;
+  new_value: string;
+  changed_by: string | null;
+  changed_at: string;
+  metadata?: Record<string, any>;
+}
+
+export interface EventSettingsHistoryItem {
+  id: string;
+  eventId: string;
+  settingKey: string;
+  oldValue: string | null;
+  newValue: string;
+  changedBy: string | null;
+  changedAt: string;
+  metadata?: Record<string, any>;
+  changedByName?: string;
+}
+
 
 

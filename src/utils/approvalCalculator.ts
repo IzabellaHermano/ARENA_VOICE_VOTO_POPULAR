@@ -273,12 +273,22 @@ export function formatStopwatch(totalSeconds: number): string {
 }
 
 /**
- * Recupera o tempo padrão da rodada configurado nas Configurações Gerais
+ * Recupera o tempo padrão da rodada configurado para o evento ou nas configurações gerais
  * Fallback padrão: 60 segundos
  */
-export function getConfiguredVotingDuration(): number {
+export function getConfiguredVotingDuration(eventId?: string): number {
   try {
     if (typeof window !== 'undefined' && window.localStorage) {
+      if (eventId) {
+        const eventSettingsStored = localStorage.getItem(`arena_voice_event_settings_${eventId}`);
+        if (eventSettingsStored) {
+          const parsed = JSON.parse(eventSettingsStored);
+          if (typeof parsed.defaultRoundDuration === 'number' && parsed.defaultRoundDuration > 0) {
+            return parsed.defaultRoundDuration;
+          }
+        }
+      }
+
       const stored = localStorage.getItem('arena_voice_admin_event_config');
       if (stored) {
         const parsed = JSON.parse(stored);

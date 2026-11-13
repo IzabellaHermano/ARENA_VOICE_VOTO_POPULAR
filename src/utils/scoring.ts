@@ -40,6 +40,9 @@ export interface ProjectScoringResult {
   // Critérios dinâmicos por evento (Etapa 3)
   criteriaScores?: CriterionScoreItem[];
 
+  // Configuração do Peso do Voto Popular (Etapa 4)
+  popularVoteWeight?: number;
+
   // Valores brutos de ponto flutuante (precisão completa) ou null se sem votos
   rawInnovation: number | null;
   rawImpact: number | null;
@@ -82,14 +85,19 @@ export function formatPercent(value: number | null | undefined, fallback: string
 }
 
 /**
- * Calcula a pontuação oficial do projeto a partir do resultado consolidado
+ * Calcula a pontuação oficial do projeto a partir do resultado consolidado e do peso do Voto Popular
  */
 export function calculateProjectScore(
   project: { id?: string; name: string; description?: string; bannerUrl?: string; order?: number; active?: boolean },
-  resultDoc?: Partial<ResultDocument> | null
+  resultDoc?: Partial<ResultDocument> | null,
+  eventPopularWeight: number = 20
 ): ProjectScoringResult {
   const projectId = project.id || '';
   const totalVotes = resultDoc?.totalVotes || 0;
+  const effectivePopularWeight =
+    resultDoc?.popularVoteWeight !== undefined && resultDoc.popularVoteWeight !== null
+      ? Number(resultDoc.popularVoteWeight)
+      : eventPopularWeight;
 
   // Caso 1: Projeto sem avaliações
   if (totalVotes === 0) {
@@ -102,6 +110,7 @@ export function calculateProjectScore(
       active: project.active ?? true,
       totalVotes: 0,
       hasEvaluations: false,
+      popularVoteWeight: effectivePopularWeight,
       rawInnovation: null,
       rawImpact: null,
       rawDevelopment: null,
@@ -164,11 +173,11 @@ export function calculateProjectScore(
       ? resultDoc.percentage
       : (rawGeneral / 5) * 100;
 
-  // Pontos do Voto Popular = (Média Geral / 5) * 20 (máximo 20 pontos)
+  // Pontos do Voto Popular = (Média Geral / 5) * peso configurado (máximo popularWeight pontos)
   const rawPoints =
     resultDoc?.popularPoints !== undefined && resultDoc.popularPoints !== null
       ? resultDoc.popularPoints
-      : (rawGeneral / 5) * 20;
+      : (rawGeneral / 5) * effectivePopularWeight;
 
   return {
     projectId,
@@ -180,6 +189,7 @@ export function calculateProjectScore(
     totalVotes,
     hasEvaluations: true,
     criteriaScores,
+    popularVoteWeight: effectivePopularWeight,
     rawInnovation,
     rawImpact,
     rawDevelopment,
@@ -261,7 +271,8 @@ export function rankProjects(items: ProjectScoringResult[]): ProjectScoringResul
  */
 export function buildRankedResults(
   projects: (ProjectDocument | { id: string; name: string; description?: string; bannerUrl?: string; order?: number; active?: boolean })[],
-  resultsMap: Map<string, Partial<ResultDocument>> | Record<string, Partial<ResultDocument>>
+  resultsMap: Map<string, Partial<ResultDocument>> | Record<string, Partial<ResultDocument>>,
+  eventPopularWeight: number = 20
 ): ProjectScoringResult[] {
   const getDoc = (id: string): Partial<ResultDocument> | undefined => {
     if (resultsMap instanceof Map) {
@@ -272,7 +283,7 @@ export function buildRankedResults(
 
   const calculated = projects.map((project) => {
     const resDoc = getDoc(project.id || '');
-    return calculateProjectScore(project, resDoc);
+    return calculateProjectScore(project, resDoc, eventPopularWeight);
   });
 
   return rankProjects(calculated);

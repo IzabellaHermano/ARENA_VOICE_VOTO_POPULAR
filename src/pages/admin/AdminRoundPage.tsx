@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Project, RoundStatus as RoundStatusType, RoundDocument, ResultDocument } from '@/types';
+import { Project, RoundStatus as RoundStatusType, RoundDocument, ResultDocument, EventSettings } from '@/types';
 import { EventService, DEFAULT_EVENT_ID } from '@/services/eventService';
+import { SettingsService } from '@/services/settingsService';
 import { useAdminEvent } from '@/contexts/AdminEventContext';
 import {
   RoundStatus,
@@ -26,6 +27,7 @@ import {
   ExternalLink,
   Trophy,
   CheckCircle2,
+  Clock,
 } from 'lucide-react';
 
 export const AdminRoundPage: React.FC = () => {
@@ -51,9 +53,20 @@ export const AdminRoundPage: React.FC = () => {
   const [isLoadingAction, setIsLoadingAction] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
+  const [eventSettings, setEventSettings] = useState<EventSettings | null>(null);
+  const [roundDurationInput, setRoundDurationInput] = useState<number>(60);
 
-  const configuredDuration = useMemo(() => getConfiguredVotingDuration(), []);
+  const configuredDuration = useMemo(() => getConfiguredVotingDuration(activeEventId), [activeEventId]);
   const autoClosedRoundIdRef = useRef<string | null>(null);
+
+  // Carrega configurações do evento ativo (duração padrão, peso, etc.)
+  useEffect(() => {
+    if (!activeEventId) return;
+    SettingsService.getSettings(activeEventId).then((st) => {
+      setEventSettings(st);
+      setRoundDurationInput(st.defaultRoundDuration);
+    }).catch(console.warn);
+  }, [activeEventId]);
 
   // 1. Escuta o evento em tempo real no Supabase para o evento ativo
   useEffect(() => {
@@ -191,11 +204,19 @@ export const AdminRoundPage: React.FC = () => {
     return () => clearInterval(interval);
   }, [roundStatus, currentRoundDoc?.startedAt, currentRoundDoc?.endedAt]);
 
+  // Duração efetiva da rodada: prioriza durationSeconds registrado no banco para a rodada
+  const effectiveRoundDuration = useMemo(() => {
+    if (currentRoundDoc?.durationSeconds) {
+      return currentRoundDoc.durationSeconds;
+    }
+    return eventSettings?.defaultRoundDuration || configuredDuration;
+  }, [currentRoundDoc?.durationSeconds, eventSettings?.defaultRoundDuration, configuredDuration]);
+
   // Contagem regressiva
   const remainingSeconds = useMemo(() => {
-    if (!currentRoundDoc?.startedAt) return configuredDuration;
-    return Math.max(0, configuredDuration - elapsedSeconds);
-  }, [configuredDuration, elapsedSeconds, currentRoundDoc?.startedAt]);
+    if (!currentRoundDoc?.startedAt) return effectiveRoundDuration;
+    return Math.max(0, effectiveRoundDuration - elapsedSeconds);
+  }, [effectiveRoundDuration, elapsedSeconds, currentRoundDoc?.startedAt]);
 
   // AUTO-CLOSE: Quando o tempo restante atingir 00:00, encerra a rodada automaticamente
   useEffect(() => {
@@ -279,8 +300,8 @@ export const AdminRoundPage: React.FC = () => {
     setErrorMessage(null);
 
     try {
-      await EventService.openRound(activeEventId, targetProjId);
-      setSuccessMessage('Avaliação liberada com sucesso! Telão e celulares atualizados.');
+      await EventService.openRound(activeEventId, targetProjId, roundDurationInput);
+      setSuccessMessage(`Avaliação liberada com sucesso (${roundDurationInput}s)! Telão e celulares atualizados.`);
       setTimeout(() => setSuccessMessage(null), 3000);
     } catch (err: any) {
       console.error('Falha ao abrir rodada:', err);
@@ -517,6 +538,45 @@ export const AdminRoundPage: React.FC = () => {
       {/* BARRA DE AÇÕES: CONTROLE RIGOROSO DA SEQUÊNCIA E VOTAÇÃO */}
       <div className="bg-arena-card border border-arena-border rounded-2xl p-5 flex flex-wrap items-center justify-between gap-4 shadow-xl">
         <div className="flex flex-wrap items-center gap-3 w-full sm:w-auto">
+          {/* Seletor de Duração da Rodada (Configuração individual por rodada) */}
+          {roundStatus !== 'aberta' ? (
+            <div className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-arena-black border border-arena-border">
+              <Clock className="w-3.5 h-3.5 text-arena-gold shrink-0" />
+              <span className="text-xs text-gray-400 font-bold hidden sm:inline">Tempo:</span>
+              {[30, 60, 90, 120].map((sec) => (
+                <button
+                  key={sec}
+                  type="button"
+                  onClick={() => setRoundDurationInput(sec)}
+                  className={`px-2 py-0.5 rounded text-[11px] font-mono font-bold transition-all ${
+                    roundDurationInput === sec
+                      ? 'bg-arena-gold text-black shadow-sm'
+                      : 'bg-white/5 text-gray-300 hover:bg-white/10'
+                  }`}
+                >
+                  {sec}s
+                </button>
+              ))}
+              <div className="flex items-center gap-1 ml-1 pl-1.5 border-l border-arena-border">
+                <input
+                  type="number"
+                  min={10}
+                  max={3600}
+                  value={roundDurationInput}
+                  onChange={(e) => setRoundDurationInput(Math.max(10, Math.min(3600, Number(e.target.value) || 10)))}
+                  className="w-12 bg-arena-card border border-arena-border rounded px-1 py-0.5 text-[11px] font-mono text-white text-center focus:outline-none focus:border-arena-gold"
+                  title="Duração personalizada em segundos (10 a 3600)"
+                />
+                <span className="text-[10px] text-gray-500 font-mono">s</span>
+              </div>
+            </div>
+          ) : (
+            <div className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-arena-green/10 border border-arena-green/30 text-arena-green text-xs font-bold font-mono">
+              <Clock className="w-3.5 h-3.5" />
+              <span>Duração da rodada ativa: {effectiveRoundDuration}s</span>
+            </div>
+          )}
+
           {/* 1. Botão Liberar Avaliação / Iniciar Primeira Rodada */}
           {roundStatus === 'aguardando' && (
             <AdminActionButton

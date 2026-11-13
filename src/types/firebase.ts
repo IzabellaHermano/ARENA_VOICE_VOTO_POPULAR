@@ -45,6 +45,8 @@ export interface RoundDocument {
   status: 'waiting' | 'open' | 'closed';
   startedAt: Timestamp | null;
   endedAt: Timestamp | null;
+  durationSeconds?: number;
+  questionsSnapshot?: any;
   createdAt: Timestamp;
   updatedAt: Timestamp;
 }
@@ -77,6 +79,7 @@ export interface ResultDocument {
   averageGeneral: number | null;
   percentage: number | null;
   popularPoints: number | null;
+  popularVoteWeight?: number | null;
   questionsMetrics?: any[];
   updatedAt: Timestamp;
 }

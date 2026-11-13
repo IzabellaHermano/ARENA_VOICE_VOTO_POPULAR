@@ -135,6 +135,8 @@ function mapRoundRow(row: any): RoundDocument {
     status: row.status,
     startedAt: createTimestamp(row.started_at),
     endedAt: createTimestamp(row.ended_at),
+    durationSeconds: row.duration_seconds !== undefined && row.duration_seconds !== null ? Number(row.duration_seconds) : undefined,
+    questionsSnapshot: row.questions_snapshot,
     createdAt: createTimestamp(row.created_at || Date.now()),
     updatedAt: createTimestamp(row.updated_at || Date.now()),
   };
@@ -155,6 +157,8 @@ function mapResultRow(row: any): ResultDocument {
     averageGeneral: row.average_general !== null ? Number(row.average_general) : null,
     percentage: row.percentage !== null ? Number(row.percentage) : null,
     popularPoints: row.popular_points !== null ? Number(row.popular_points) : null,
+    popularVoteWeight: row.popular_vote_weight !== undefined && row.popular_vote_weight !== null ? Number(row.popular_vote_weight) : 20.0,
+    questionsMetrics: row.questions_metrics,
     updatedAt: { seconds: Math.floor(new Date(row.updated_at || Date.now()).getTime() / 1000), nanoseconds: 0 } as any,
   };
 }
@@ -1156,16 +1160,33 @@ export const EventService = {
   // ==========================================
 
   /**
-   * Abre uma rodada no servidor de forma atômica
+   * Abre uma rodada no servidor de forma atômica com duração configurável
    */
-  async openRound(eventId: string, projectId: string) {
+  async openRound(eventId: string, projectId: string, durationSeconds?: number) {
     if (isSupabaseConfigured) {
-      const { data, error } = await supabase.rpc('open_round', {
+      const payload: Record<string, any> = {
         p_event_id: eventId,
         p_project_id: projectId,
-      });
+      };
 
-      if (error) throw new Error(error.message);
+      if (durationSeconds !== undefined && durationSeconds !== null) {
+        payload.p_duration_seconds = Math.round(Number(durationSeconds));
+      }
+
+      const { data, error } = await supabase.rpc('open_round', payload);
+
+      if (error) {
+        // Fallback caso a assinatura RPC não tenha p_duration_seconds ainda
+        if (error.message.includes('parameter') || error.code === '42883') {
+          const { data: fbData, error: fbErr } = await supabase.rpc('open_round', {
+            p_event_id: eventId,
+            p_project_id: projectId,
+          });
+          if (fbErr) throw new Error(fbErr.message);
+          return fbData as { success: boolean; round_id: string; project_id: string };
+        }
+        throw new Error(error.message);
+      }
       return data as { success: boolean; round_id: string; project_id: string };
     }
 
