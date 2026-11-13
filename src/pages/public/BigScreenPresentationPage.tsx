@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
+import { useParams, useLocation } from 'react-router-dom';
 import { ArenaLogo, ArenaMascot } from '@/components/branding';
 import { QRCodeDisplay } from '@/components/qrcode';
 import { ApprovalGauge } from '@/components/admin/ApprovalGauge';
@@ -28,6 +29,47 @@ import {
 } from 'lucide-react';
 
 export const BigScreenPresentationPage: React.FC = () => {
+  const { eventId: paramEventId } = useParams<{ eventId?: string }>();
+  const location = useLocation();
+
+  const queryEventId = useMemo(() => {
+    try {
+      const sp = new URLSearchParams(location.search);
+      return sp.get('event') || sp.get('evento') || null;
+    } catch {
+      return null;
+    }
+  }, [location.search]);
+
+  const [activeDbEventId, setActiveDbEventId] = useState<string | null>(null);
+
+  useEffect(() => {
+    let isSubscribed = true;
+    EventService.getActiveEvent().then((ev) => {
+      if (isSubscribed && ev?.id) setActiveDbEventId(ev.id);
+    });
+
+    const unsub = EventService.subscribeToEventsList((evList) => {
+      if (!isSubscribed) return;
+      const running = evList.find((e) => e.status === 'active' && Boolean(e.currentRoundId));
+      if (running?.id) {
+        setActiveDbEventId(running.id);
+      } else {
+        const latest = evList.find((e) => e.status === 'active');
+        if (latest?.id) setActiveDbEventId(latest.id);
+      }
+    });
+
+    return () => {
+      isSubscribed = false;
+      unsub();
+    };
+  }, []);
+
+  const targetEventId = useMemo(() => {
+    return paramEventId || queryEventId || activeDbEventId || DEFAULT_EVENT_ID;
+  }, [paramEventId, queryEventId, activeDbEventId]);
+
   const [activeEvent, setActiveEvent] = useState<EventDocument | null>(null);
   const [activeRound, setActiveRound] = useState<RoundDocument | null>(null);
   const [projects, setProjects] = useState<ProjectDocument[]>([]);
@@ -39,37 +81,41 @@ export const BigScreenPresentationPage: React.FC = () => {
 
   // 1. Escuta o evento principal em tempo real no Supabase
   useEffect(() => {
-    const unsub = EventService.subscribeToCurrentEvent(DEFAULT_EVENT_ID, (ev) => {
+    if (!targetEventId) return;
+    const unsub = EventService.subscribeToCurrentEvent(targetEventId, (ev) => {
       if (ev) setActiveEvent(ev);
     });
     return () => unsub();
-  }, []);
+  }, [targetEventId]);
 
   // 2. Escuta os projetos em tempo real exclusivamente do Supabase
   useEffect(() => {
-    const unsub = EventService.subscribeToProjectsList(DEFAULT_EVENT_ID, (projs) => {
+    if (!targetEventId) return;
+    const unsub = EventService.subscribeToProjectsList(targetEventId, (projs) => {
       setProjects(projs || []);
     });
     return () => unsub();
-  }, []);
+  }, [targetEventId]);
 
   // 3. Monitora o ciclo de vida completo da rodada (Aguardando -> Aberta -> Encerrada)
   useEffect(() => {
-    const unsub = EventService.subscribeToLatestRound(DEFAULT_EVENT_ID, (round) => {
+    if (!targetEventId) return;
+    const unsub = EventService.subscribeToLatestRound(targetEventId, (round) => {
       setActiveRound(round);
     });
     return () => unsub();
-  }, []);
+  }, [targetEventId]);
 
   // 4. Escuta os resultados agregados de todos os projetos em tempo real
   useEffect(() => {
-    const unsub = EventService.subscribeToAllEventResults(DEFAULT_EVENT_ID, (resList) => {
+    if (!targetEventId) return;
+    const unsub = EventService.subscribeToAllEventResults(targetEventId, (resList) => {
       if (resList && resList.length > 0) {
         setResultsList(resList);
       }
     });
     return () => unsub();
-  }, []);
+  }, [targetEventId]);
 
   // 5. Atualiza duração configurada ao montar ou quando mudar configurações
   useEffect(() => {
@@ -111,7 +157,7 @@ export const BigScreenPresentationPage: React.FC = () => {
     }
 
     const unsub = EventService.subscribeToProjectApprovalStats(
-      DEFAULT_EVENT_ID,
+      targetEventId,
       activeProject.id,
       activeRound?.id,
       (newStats) => {
@@ -120,7 +166,7 @@ export const BigScreenPresentationPage: React.FC = () => {
     );
 
     return () => unsub();
-  }, [activeProject?.id, activeRound?.id]);
+  }, [targetEventId, activeProject?.id, activeRound?.id]);
 
   // 9. Cronômetro Regressivo Oficial do Servidor (Baseado em startedAt e duração)
   // Imune a refresh da aba e reconexões de rede

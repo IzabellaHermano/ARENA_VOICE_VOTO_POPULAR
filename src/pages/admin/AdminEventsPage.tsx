@@ -105,7 +105,7 @@ export const AdminEventsPage: React.FC = () => {
     try {
       if (editingEvent?.id) {
         // Atualiza evento existente no Supabase
-        await EventService.updateEvent(editingEvent.id, {
+        const updated = await EventService.updateEvent(editingEvent.id, {
           name: formName.trim(),
           subtitle: formSubtitle.trim(),
           description: formDescription.trim(),
@@ -113,10 +113,17 @@ export const AdminEventsPage: React.FC = () => {
           bannerUrl: formBannerUrl.trim(),
           status: formStatus,
         });
+        setEvents((prev) =>
+          prev.map((e) =>
+            e.id === updated.id
+              ? { ...e, ...updated }
+              : e
+          )
+        );
         setSuccessMessage(`Evento "${formName}" atualizado com sucesso!`);
       } else {
         // Cria novo evento no Supabase
-        await EventService.createEvent({
+        const created = await EventService.createEvent({
           name: formName.trim(),
           subtitle: formSubtitle.trim(),
           description: formDescription.trim(),
@@ -124,11 +131,29 @@ export const AdminEventsPage: React.FC = () => {
           bannerUrl: formBannerUrl.trim(),
           status: formStatus,
         });
+        // Atualiza o estado local imediatamente (aparece na listagem sem reload)
+        const summaryItem: EventSummary = {
+          ...created,
+          projectsCount: 0,
+        };
+        setEvents((prev) => [summaryItem, ...prev.filter((e) => e.id !== created.id)]);
         setSuccessMessage(`Novo evento "${formName}" criado com sucesso!`);
       }
 
       closeModal();
       setTimeout(() => setSuccessMessage(null), 4000);
+
+      // Re-sincroniza a lista completa via consulta direta
+      try {
+        const freshList = await EventService.listEvents(
+          adminUser?.uid ? { userId: adminUser.uid, role: role || undefined } : undefined
+        );
+        if (freshList && freshList.length > 0) {
+          setEvents(freshList);
+        }
+      } catch (refreshErr) {
+        console.warn('Re-sincronização de eventos após salvar:', refreshErr);
+      }
     } catch (err: any) {
       console.error('Erro ao salvar evento:', err);
       setErrorMessage(err.message || 'Falha ao salvar evento.');

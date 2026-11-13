@@ -483,6 +483,62 @@ export const EventService = {
   },
 
   /**
+   * Consulta o evento atualmente ativo ou com votação em andamento no Supabase
+   */
+  async getActiveEvent(): Promise<EventDocument | null> {
+    if (!isSupabaseConfigured) {
+      return {
+        id: DEFAULT_EVENT_ID,
+        name: 'Arena Voice 2026',
+        status: 'active',
+        currentRoundId: null,
+        currentProjectId: null,
+        resultsPublished: false,
+        createdAt: { seconds: Date.now() / 1000, nanoseconds: 0 } as any,
+        updatedAt: { seconds: Date.now() / 1000, nanoseconds: 0 } as any,
+      };
+    }
+
+    try {
+      // 1. Prioriza evento ativo com rodada aberta
+      const { data: openEvent } = await supabase
+        .from('events')
+        .select('*')
+        .eq('status', 'active')
+        .not('current_round_id', 'is', null)
+        .order('updated_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
+      if (openEvent) return mapEventRow(openEvent);
+
+      // 2. Busca evento ativo mais recentemente atualizado
+      const { data: latestActive } = await supabase
+        .from('events')
+        .select('*')
+        .eq('status', 'active')
+        .order('updated_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
+      if (latestActive) return mapEventRow(latestActive);
+
+      // 3. Fallback para DEFAULT_EVENT_ID
+      const { data: defaultEv } = await supabase
+        .from('events')
+        .select('*')
+        .eq('id', DEFAULT_EVENT_ID)
+        .maybeSingle();
+
+      if (defaultEv) return mapEventRow(defaultEv);
+    } catch (err) {
+      console.warn('Erro ao consultar evento ativo no Supabase:', err);
+    }
+
+    return null;
+  },
+
+  /**
    * Monitora o evento principal em tempo real via Supabase Realtime
    */
   subscribeToCurrentEvent(
@@ -589,18 +645,19 @@ export const EventService = {
 
   /**
    * Monitora a rodada ativa do evento diretamente na tabela rounds
-   * Sincronização direta e instantânea com garantia de estado
+   * Sincronização direta e instantânea com garantia de estado para qualquer evento
    */
   subscribeToActiveRound(
     roundId: string | null | undefined,
     onUpdate: (round: RoundDocument | null) => void,
-    onError?: (err: Error) => void
+    onError?: (err: Error) => void,
+    eventId?: string | null
   ): Unsubscribe {
     if (!isSupabaseConfigured) {
       const mockRound = AdminMockService.getRound();
       onUpdate({
         id: roundId || 'round_mock_projeto01',
-        eventId: DEFAULT_EVENT_ID,
+        eventId: eventId || DEFAULT_EVENT_ID,
         projectId: mockRound.projetoAtualId,
         status: mockRound.status === 'aberta' ? 'open' : mockRound.status === 'encerrada' ? 'closed' : 'waiting',
         startedAt: { seconds: Date.now() / 1000, nanoseconds: 0 } as any,
@@ -612,6 +669,7 @@ export const EventService = {
     }
 
     let isSubscribed = true;
+    const targetEventId = eventId || undefined;
 
     // 1. Consulta inicial
     const fetchRound = async () => {
@@ -620,10 +678,16 @@ export const EventService = {
 
         if (roundId) {
           query = query.eq('id', roundId);
-        } else {
-          // Se roundId não for passado, busca a rodada 'open' mais recente do evento
+        } else if (targetEventId) {
+          // Busca a rodada 'open' mais recente do evento especificado
           query = query
-            .eq('event_id', DEFAULT_EVENT_ID)
+            .eq('event_id', targetEventId)
+            .eq('status', 'open')
+            .order('started_at', { ascending: false })
+            .limit(1);
+        } else {
+          // Busca qualquer rodada 'open' mais recente
+          query = query
             .eq('status', 'open')
             .order('started_at', { ascending: false })
             .limit(1);
@@ -651,20 +715,41 @@ export const EventService = {
     fetchRound();
 
     // 2. Canal Realtime ouvindo a tabela rounds para o evento com tratamento de ciclo de vida
-    const channelId = `round_sub_${roundId || 'any'}_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+    const channelId = `round_sub_${roundId || targetEventId || 'any'}_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+    const filter = roundId
+      ? `id=eq.${roundId}`
+      : targetEventId
+      ? `event_id=eq.${targetEventId}`
+      : undefined;
+
+    const channelConfig: any = { event: '*', schema: 'public', table: 'rounds' };
+    if (filter) {
+      channelConfig.filter = filter;
+    }
+
     const channel = supabase
       .channel(channelId)
       .on(
         'postgres_changes',
-        { event: '*', schema: 'public', table: 'rounds', filter: `event_id=eq.${DEFAULT_EVENT_ID}` },
+        channelConfig,
         (payload) => {
           if (!isSubscribed) return;
+          if (payload.eventType === 'DELETE') {
+            onUpdate(null);
+            return;
+          }
           if (payload.new && (payload.new as any).id) {
-            // Se roundId foi especificado, só atualiza se for ela; caso contrário, atualiza qualquer rodada ativa
-            if (!roundId || (payload.new as any).id === roundId) {
-              onUpdate(mapRoundRow(payload.new));
-            } else if ((payload.new as any).status === 'open') {
-              onUpdate(mapRoundRow(payload.new));
+            const newRow = payload.new as any;
+            if (roundId) {
+              if (newRow.id === roundId) {
+                onUpdate(mapRoundRow(newRow));
+              }
+            } else if (targetEventId) {
+              if (newRow.event_id === targetEventId) {
+                onUpdate(mapRoundRow(newRow));
+              }
+            } else {
+              onUpdate(mapRoundRow(newRow));
             }
           } else {
             fetchRound();
@@ -1282,12 +1367,29 @@ export const EventService = {
         rpcPayload.p_impact = imp;
         rpcPayload.p_development = dev;
       } else {
-        rpcPayload.p_innovation = payload.innovation;
-        rpcPayload.p_impact = payload.impact;
-        rpcPayload.p_development = payload.development;
+        // Envia array vazio para desambiguar a assinatura da Etapa 3 com p_answers jsonb
+        rpcPayload.p_answers = [];
+        rpcPayload.p_innovation = payload.innovation ?? 3;
+        rpcPayload.p_impact = payload.impact ?? 3;
+        rpcPayload.p_development = payload.development ?? 3;
       }
 
-      const { data, error } = await supabase.rpc('submit_vote', rpcPayload);
+      let { data, error } = await supabase.rpc('submit_vote', rpcPayload);
+
+      // Fallback para ambientes legados sem o parâmetro p_answers
+      if (error && (error.message.includes('p_answers') || error.code === '42883')) {
+        const legacyPayload = {
+          p_event_id: payload.eventId,
+          p_round_id: payload.roundId,
+          p_project_id: payload.projectId,
+          p_innovation: rpcPayload.p_innovation,
+          p_impact: rpcPayload.p_impact,
+          p_development: rpcPayload.p_development,
+        };
+        const fbRes = await supabase.rpc('submit_vote', legacyPayload);
+        data = fbRes.data;
+        error = fbRes.error;
+      }
 
       if (error) {
         throw new Error(error.message);

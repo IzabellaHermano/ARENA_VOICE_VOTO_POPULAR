@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback, useMemo } from 'react';
+import React, { useEffect, useState, useCallback, useMemo, useContext } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { AuthService } from '@/services/authService';
 import { EventService, DEFAULT_EVENT_ID } from '@/services/eventService';
@@ -6,6 +6,7 @@ import { QuestionService } from '@/services/questionService';
 import { EventDocument, ProjectDocument, RoundDocument } from '@/types';
 import { EventQuestion } from '@/types/supabase';
 import { VotingContext, VotingContextType } from './VotingContext';
+import { AdminEventContext } from './AdminEventContext';
 
 export interface VotingProviderProps {
   children: React.ReactNode;
@@ -14,6 +15,8 @@ export interface VotingProviderProps {
 export const VotingProvider: React.FC<VotingProviderProps> = ({ children }) => {
   const navigate = useNavigate();
   const location = useLocation();
+  const adminEventContext = useContext(AdminEventContext);
+  const adminEventId = adminEventContext?.currentEventId;
 
   const [voterUid, setVoterUid] = useState<string | null>(null);
   const [event, setEvent] = useState<EventDocument | null>(null);
@@ -27,6 +30,66 @@ export const VotingProvider: React.FC<VotingProviderProps> = ({ children }) => {
     'connected' | 'connecting' | 'reconnecting' | 'offline'
   >('connecting');
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+
+  // Descoberta do evento ativo no banco (para acesso via QR Code genérico /votar)
+  const [activeDbEventId, setActiveDbEventId] = useState<string | null>(null);
+
+  // Monitora qual é o evento ativo na tabela events do Supabase
+  useEffect(() => {
+    let isSubscribed = true;
+    const checkActive = async () => {
+      const active = await EventService.getActiveEvent();
+      if (isSubscribed && active?.id) {
+        setActiveDbEventId(active.id);
+      }
+    };
+
+    checkActive();
+
+    // Acompanha trocas de evento ou rodadas ao vivo
+    const unsub = EventService.subscribeToEventsList((evList) => {
+      if (!isSubscribed) return;
+      // Prioriza evento com rodada aberta
+      const openRoundEv = evList.find((e) => e.status === 'active' && Boolean(e.currentRoundId));
+      if (openRoundEv?.id) {
+        setActiveDbEventId(openRoundEv.id);
+        return;
+      }
+      // Ou o primeiro evento com status 'active'
+      const activeEv = evList.find((e) => e.status === 'active');
+      if (activeEv?.id) {
+        setActiveDbEventId(activeEv.id);
+      }
+    });
+
+    return () => {
+      isSubscribed = false;
+      unsub();
+    };
+  }, []);
+
+  // Resolução dinâmica do ID do evento:
+  // 1. Rota com path: /votar/:eventId ou /votar/:eventId/:projectId
+  const pathEventMatch = location.pathname.match(/^\/votar\/([^\/]+)/);
+  const pathEventId =
+    pathEventMatch && pathEventMatch[1] && pathEventMatch[1] !== 'undefined'
+      ? pathEventMatch[1]
+      : null;
+
+  // 2. Query param: ?event=... ou ?evento=...
+  const queryEventId = useMemo(() => {
+    try {
+      const sp = new URLSearchParams(location.search);
+      return sp.get('event') || sp.get('evento') || null;
+    } catch {
+      return null;
+    }
+  }, [location.search]);
+
+  // Evento efetivo resolvido
+  const activeEventId = useMemo(() => {
+    return pathEventId || queryEventId || adminEventId || activeDbEventId || DEFAULT_EVENT_ID;
+  }, [pathEventId, queryEventId, adminEventId, activeDbEventId]);
 
   // Função centralizada para inicializar sessão anônima via Supabase
   const initAnonymousSession = useCallback(async () => {
@@ -85,10 +148,12 @@ export const VotingProvider: React.FC<VotingProviderProps> = ({ children }) => {
     };
   }, [initAnonymousSession]);
 
-  // 3. Escuta o evento principal em tempo real via Supabase
+  // 3. Escuta o evento ativo em tempo real via Supabase
   useEffect(() => {
+    if (!activeEventId) return;
+
     const unsubscribeEvent = EventService.subscribeToCurrentEvent(
-      DEFAULT_EVENT_ID,
+      activeEventId,
       (updatedEvent) => {
         setEvent(updatedEvent);
         setConnectionStatus('connected');
@@ -104,20 +169,21 @@ export const VotingProvider: React.FC<VotingProviderProps> = ({ children }) => {
     );
 
     return () => unsubscribeEvent();
-  }, []);
+  }, [activeEventId]);
 
-  // 3. Escuta a rodada ativa em tempo real via Supabase
+  // 3. Escuta a rodada ativa em tempo real via Supabase (filtrada pelo evento)
   useEffect(() => {
     const unsubscribeRound = EventService.subscribeToActiveRound(
       event?.currentRoundId || null,
       (updatedRound) => {
         setCurrentRound(updatedRound);
       },
-      () => {}
+      () => {},
+      activeEventId
     );
 
     return () => unsubscribeRound();
-  }, [event?.currentRoundId]);
+  }, [event?.currentRoundId, activeEventId]);
 
   // 4. Escuta o projeto ativo em tempo real
   const activeProjectId = currentRound?.projectId || event?.currentProjectId;
@@ -141,7 +207,7 @@ export const VotingProvider: React.FC<VotingProviderProps> = ({ children }) => {
 
   // 4.1 Carrega as perguntas ativas ou o snapshot da rodada
   useEffect(() => {
-    const targetEventId = event?.id || DEFAULT_EVENT_ID;
+    const targetEventId = activeEventId || event?.id || DEFAULT_EVENT_ID;
 
     // Se a rodada possui snapshot congelado de perguntas, utiliza-o
     const snapshot = (currentRound as any)?.questions_snapshot;
@@ -166,7 +232,7 @@ export const VotingProvider: React.FC<VotingProviderProps> = ({ children }) => {
     QuestionService.listQuestions(targetEventId, false).then((list) => {
       setCurrentQuestions(list);
     });
-  }, [event?.id, currentRound]);
+  }, [activeEventId, event?.id, currentRound]);
 
   // 5. Verifica se o participante já votou no projeto em avaliação
   useEffect(() => {
@@ -178,19 +244,22 @@ export const VotingProvider: React.FC<VotingProviderProps> = ({ children }) => {
         return;
       }
 
+      const targetEventId = activeEventId || event?.id || DEFAULT_EVENT_ID;
+      const localKey = `voted_${targetEventId}_${activeProjectId}_${voterUid}`;
+
       // Verifica no armazenamento local rápido
-      const localVoted = localStorage.getItem(`voted_${DEFAULT_EVENT_ID}_${activeProjectId}_${voterUid}`);
+      const localVoted = localStorage.getItem(localKey);
       if (localVoted === 'true') {
         if (!isCancelled) setHasVotedCurrentProject(true);
         return;
       }
 
-      // Consulta confirmação determinística no Firestore
-      const hasVoted = await EventService.checkUserVote(DEFAULT_EVENT_ID, activeProjectId, voterUid);
+      // Consulta confirmação determinística no Supabase
+      const hasVoted = await EventService.checkUserVote(targetEventId, activeProjectId, voterUid);
       if (!isCancelled) {
         setHasVotedCurrentProject(hasVoted);
         if (hasVoted) {
-          localStorage.setItem(`voted_${DEFAULT_EVENT_ID}_${activeProjectId}_${voterUid}`, 'true');
+          localStorage.setItem(localKey, 'true');
         }
       }
     }
@@ -200,7 +269,7 @@ export const VotingProvider: React.FC<VotingProviderProps> = ({ children }) => {
     return () => {
       isCancelled = true;
     };
-  }, [voterUid, activeProjectId]);
+  }, [voterUid, activeProjectId, activeEventId, event?.id]);
 
   // 6. Roteamento e transição automática em tempo real para o público
   // O público NÃO deve atualizar a página para receber o novo projeto!
@@ -281,7 +350,7 @@ export const VotingProvider: React.FC<VotingProviderProps> = ({ children }) => {
       setIsSubmitting(true);
       setErrorMessage(null);
 
-      const targetEventId = event?.id || DEFAULT_EVENT_ID;
+      const targetEventId = activeEventId || event?.id || DEFAULT_EVENT_ID;
 
       try {
         const answersArray = payload.answers

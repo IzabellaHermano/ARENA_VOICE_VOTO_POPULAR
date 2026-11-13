@@ -112,13 +112,18 @@ export const AdminRoundPage: React.FC = () => {
 
   // 4. Sincroniza o projeto selecionado a partir do evento ou da rodada
   useEffect(() => {
-    const activeProjId = currentRoundDoc?.projectId || activeEvent?.currentProjectId;
+    // Se há rodada ativa no evento, o projeto da rodada tem prioridade.
+    // Quando a rodada é zerada (avanço de projeto), o projeto oficial do evento (currentProjectId) tem prioridade.
+    const activeProjId = activeEvent?.currentRoundId
+      ? (currentRoundDoc?.projectId || activeEvent?.currentProjectId)
+      : (activeEvent?.currentProjectId || currentRoundDoc?.projectId);
+
     if (activeProjId) {
       setSelectedProjectId(activeProjId);
     } else if (activeProjects.length > 0 && !selectedProjectId) {
       setSelectedProjectId(activeProjects[0].id);
     }
-  }, [currentRoundDoc?.projectId, activeEvent?.currentProjectId, activeProjects, selectedProjectId]);
+  }, [activeEvent?.currentRoundId, currentRoundDoc?.projectId, activeEvent?.currentProjectId, activeProjects, selectedProjectId]);
 
   // Atualiza currentProject quando selectedProjectId mudar
   useEffect(() => {
@@ -136,38 +141,44 @@ export const AdminRoundPage: React.FC = () => {
   const roundId = activeEvent?.currentRoundId;
   useEffect(() => {
     if (!roundId) {
-      // Se não há roundId ativo no evento, mas temos currentRoundDoc anterior
-      if (!activeEvent?.currentRoundId) {
-        if (currentRoundDoc && currentRoundDoc.status === 'open') {
-          setRoundStatus('encerrada');
-        } else if (!currentRoundDoc) {
-          setRoundStatus('aguardando');
-        }
+      // Se não há rodada ativa no evento:
+      if (currentRoundDoc && currentRoundDoc.status === 'open') {
+        setRoundStatus('encerrada');
+      } else {
+        // Se a rodada foi zerada ou próximo projeto foi preparado, limpa snapshot
+        setCurrentRoundDoc(null);
+        setRoundStatus('aguardando');
       }
       return;
     }
 
-    const unsub = EventService.subscribeToActiveRound(roundId, (round) => {
-      if (round) {
-        setCurrentRoundDoc(round);
-        const mappedStatus: RoundStatusType =
-          round.status === 'open'
-            ? 'aberta'
-            : round.status === 'closed'
-            ? 'encerrada'
-            : 'aguardando';
-        setRoundStatus(mappedStatus);
+    const unsub = EventService.subscribeToActiveRound(
+      roundId,
+      (round) => {
+        if (round) {
+          setCurrentRoundDoc(round);
+          const mappedStatus: RoundStatusType =
+            round.status === 'open'
+              ? 'aberta'
+              : round.status === 'closed'
+              ? 'encerrada'
+              : 'aguardando';
+          setRoundStatus(mappedStatus);
 
-        if (round.projectId) {
-          setSelectedProjectId(round.projectId);
+          if (round.projectId) {
+            setSelectedProjectId(round.projectId);
+          }
+        } else {
+          setCurrentRoundDoc(null);
+          setRoundStatus('aguardando');
         }
-      } else {
-        setRoundStatus('aguardando');
-      }
-    });
+      },
+      undefined,
+      activeEventId
+    );
 
     return () => unsub();
-  }, [roundId, activeEvent?.currentRoundId]);
+  }, [roundId, activeEventId]);
 
   // 6. CRONÔMETRO SINCRONIZADO: Baseado no timestamp oficial do servidor (startedAt)
   useEffect(() => {
@@ -323,6 +334,8 @@ export const AdminRoundPage: React.FC = () => {
 
     try {
       await EventService.prepareNextRound(activeEventId, nextProject.id);
+      setCurrentRoundDoc(null);
+      setRoundStatus('aguardando');
       setSelectedProjectId(nextProject.id);
       setCurrentProject(nextProject);
       setSuccessMessage(`Próximo projeto preparado: ${nextProject.nome}. Pronto para liberar.`);
@@ -371,7 +384,7 @@ export const AdminRoundPage: React.FC = () => {
 
         <div className="flex flex-wrap items-center gap-2">
           <a
-            href="/telao"
+            href={`/telao/${activeEventId}`}
             target="_blank"
             rel="noopener noreferrer"
             className="px-4 py-2 rounded-xl bg-gradient-to-r from-arena-red to-red-700 hover:from-red-600 hover:to-red-800 text-white shadow-neon-glow text-xs font-black uppercase tracking-wider flex items-center gap-2 transition-all"
@@ -525,7 +538,7 @@ export const AdminRoundPage: React.FC = () => {
         </div>
 
         <a
-          href="/telao"
+          href={`/telao/${activeEventId}`}
           target="_blank"
           rel="noopener noreferrer"
           className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-gradient-to-r from-arena-red to-[#B3050F] hover:from-[#FF1E27] hover:to-arena-red text-white text-xs font-black uppercase tracking-wider shadow-neon-glow transition-all shrink-0"

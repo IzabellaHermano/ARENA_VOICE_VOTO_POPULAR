@@ -46,6 +46,7 @@ export const AppRoutes: React.FC = () => {
 
       {/* 3. Telão Oficial Único (16:9 Fullscreen sem sidebar) — Todas as rotas secundárias redirecionam para /telao */}
       <Route path="/telao" element={<BigScreenPresentationPage />} />
+      <Route path="/telao/:eventId" element={<BigScreenPresentationPage />} />
       <Route path="/qrcode" element={<Navigate to="/telao" replace />} />
       <Route path="/telao/qrcode" element={<Navigate to="/telao" replace />} />
       <Route path="/resultados/telao" element={<Navigate to="/telao" replace />} />
