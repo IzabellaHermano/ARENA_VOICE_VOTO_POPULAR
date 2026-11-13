@@ -9,6 +9,7 @@ interface ExportModalProps {
   results: ProjectScoringResult[];
   eventName?: string;
   popularVoteWeight?: number;
+  questions?: Array<{ id: string; title: string; position?: number }>;
 }
 
 export const ExportModal: React.FC<ExportModalProps> = ({
@@ -17,6 +18,7 @@ export const ExportModal: React.FC<ExportModalProps> = ({
   results,
   eventName = 'Arena Voice 2026',
   popularVoteWeight,
+  questions,
 }) => {
   if (!isOpen) return null;
   const effectiveWeight = popularVoteWeight ?? results[0]?.popularVoteWeight ?? 20;
@@ -48,7 +50,7 @@ export const ExportModal: React.FC<ExportModalProps> = ({
           {/* Botão CSV */}
           <button
             onClick={() => {
-              exportToCSV(results, eventName);
+              exportToCSV(results, eventName, effectiveWeight, questions);
               onClose();
             }}
             className="flex items-center gap-4 p-4 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 hover:border-emerald-500/50 transition-all text-left group"
@@ -69,7 +71,7 @@ export const ExportModal: React.FC<ExportModalProps> = ({
           {/* Botão Excel */}
           <button
             onClick={() => {
-              exportToExcel(results, eventName);
+              exportToExcel(results, eventName, effectiveWeight, questions);
               onClose();
             }}
             className="flex items-center gap-4 p-4 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 hover:border-arena-blue/50 transition-all text-left group"
@@ -90,7 +92,7 @@ export const ExportModal: React.FC<ExportModalProps> = ({
           {/* Botão PDF / Imprimir */}
           <button
             onClick={() => {
-              exportToPDF(results, eventName);
+              exportToPDF(results, eventName, effectiveWeight, questions);
               onClose();
             }}
             className="flex items-center gap-4 p-4 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 hover:border-arena-gold/50 transition-all text-left group"

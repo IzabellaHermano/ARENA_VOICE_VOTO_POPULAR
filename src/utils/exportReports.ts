@@ -14,9 +14,29 @@
 import { ProjectScoringResult } from './scoring';
 
 /**
+ * Extrai a lista ordenada de títulos de critérios
+ */
+export function getCriteriaColumns(
+  results: ProjectScoringResult[],
+  questions?: Array<{ id: string; title: string; position?: number }>
+): string[] {
+  if (questions && questions.length > 0) {
+    return [...questions].sort((a, b) => (a.position ?? 0) - (b.position ?? 0)).map((q) => q.title);
+  }
+  const titles = new Set<string>();
+  results.forEach((r) => {
+    r.criteriaScores?.forEach((c) => titles.add(c.title));
+  });
+  return Array.from(titles);
+}
+
+/**
  * Dispara o download de um arquivo no navegador
  */
 function triggerDownload(content: BlobPart, filename: string, mimeType: string) {
+  if (typeof window === 'undefined' || typeof document === 'undefined') {
+    return;
+  }
   const blob = new Blob([content], { type: mimeType });
   const url = URL.createObjectURL(blob);
   const link = document.createElement('a');
@@ -29,34 +49,40 @@ function triggerDownload(content: BlobPart, filename: string, mimeType: string) 
 }
 
 /**
- * 1. Exportação em CSV com UTF-8 BOM e delimitador ';'
+ * Gera a string formatada em CSV oficial
  */
-export function exportToCSV(
+export function buildCSVString(
   results: ProjectScoringResult[],
-  eventName: string = 'Arena Voice 2026'
-): void {
+  eventName: string = 'Arena Voice 2026',
+  popularVoteWeight?: number,
+  questions?: Array<{ id: string; title: string; position?: number }>
+): string {
   const bom = '\uFEFF';
+  const effectiveWeight = popularVoteWeight ?? results[0]?.popularVoteWeight ?? 20;
+  const criteriaColumns = getCriteriaColumns(results, questions);
+
   const headers = [
     'Posição',
     'Projeto',
     'Total de Votos',
-    'Média Inovação',
-    'Média Impacto',
-    'Média Desenvolvimento',
+    ...criteriaColumns.map((col) => `Média ${col}`),
     'Média Geral',
     '% do Voto Popular',
-    'Pontos Voto Popular (máx 20)',
+    `Pontos Voto Popular (máx ${effectiveWeight})`,
   ];
 
   const rows = results.map((r) => {
     const posicao = r.rank !== null ? `${r.rank}º Lugar${r.tie ? ' (Empate)' : ''}` : 'Sem classificação';
+    const criteriaScoresCols = criteriaColumns.map((col) => {
+      const found = r.criteriaScores?.find((c) => c.title === col);
+      return `"${r.hasEvaluations && found ? found.formatted : 'Sem avaliações'}"`;
+    });
+
     return [
       `"${posicao}"`,
       `"${r.name.replace(/"/g, '""')}"`,
       r.totalVotes,
-      `"${r.formattedInnovation}"`,
-      `"${r.formattedImpact}"`,
-      `"${r.formattedDevelopment}"`,
+      ...criteriaScoresCols,
       `"${r.formattedGeneral}"`,
       `"${r.formattedPercentage}"`,
       `"${r.formattedPoints}"`,
@@ -67,23 +93,36 @@ export function exportToCSV(
     `"ARENA VOICE — VOTO POPULAR — RELATÓRIO OFICIAL"`,
     `"Evento: ${eventName}"`,
     `"Data de Emissão: ${new Date().toLocaleString('pt-BR')}"`,
-    `"Regra: Voto Popular equivale a 20% da nota final (máximo 20 pontos)"`,
+    `"Regra: Voto Popular equivale a ${effectiveWeight}% da nota final (máximo ${effectiveWeight} pontos)"`,
     '',
   ].join('\r\n');
 
-  const csvContent = bom + metadata + headers.join(';') + '\r\n' + rows.join('\r\n');
-  const filename = `arena-voice-resultados-${new Date().toISOString().slice(0, 10)}.csv`;
+  return bom + metadata + headers.join(';') + '\r\n' + rows.join('\r\n');
+}
 
+/**
+ * 1. Exportação em CSV com UTF-8 BOM e delimitador ';'
+ */
+export function exportToCSV(
+  results: ProjectScoringResult[],
+  eventName: string = 'Arena Voice 2026',
+  popularVoteWeight?: number,
+  questions?: Array<{ id: string; title: string; position?: number }>
+): void {
+  const csvContent = buildCSVString(results, eventName, popularVoteWeight, questions);
+  const filename = `arena-voice-resultados-${new Date().toISOString().slice(0, 10)}.csv`;
   triggerDownload(csvContent, filename, 'text/csv;charset=utf-8;');
 }
 
 /**
- * 2. Exportação em Excel (SpreadsheetML XML compatível com Microsoft Excel e Google Sheets)
+ * Gera o XML de planilha Excel compatível com Microsoft Excel e Google Sheets
  */
-export function exportToExcel(
+export function buildExcelString(
   results: ProjectScoringResult[],
-  eventName: string = 'Arena Voice 2026'
-): void {
+  eventName: string = 'Arena Voice 2026',
+  popularVoteWeight?: number,
+  questions?: Array<{ id: string; title: string; position?: number }>
+): string {
   const sanitize = (text: string) =>
     text
       .replace(/&/g, '&amp;')
@@ -92,25 +131,39 @@ export function exportToExcel(
       .replace(/"/g, '&quot;')
       .replace(/'/g, '&apos;');
 
+  const effectiveWeight = popularVoteWeight ?? results[0]?.popularVoteWeight ?? 20;
+  const criteriaColumns = getCriteriaColumns(results, questions);
+  const totalColumnCount = 3 + criteriaColumns.length + 3;
+
   const rowsXml = results
     .map((r) => {
       const posicao = r.rank !== null ? `${r.rank}º` : '-';
+      const criteriaCells = criteriaColumns
+        .map((col) => {
+          const found = r.criteriaScores?.find((c) => c.title === col);
+          const hasScore = r.hasEvaluations && found && found.average !== null;
+          return `<Cell ss:StyleID="Decimal"><Data ss:Type="${hasScore ? 'Number' : 'String'}">${hasScore ? found.average!.toFixed(2) : 'Sem avaliações'}</Data></Cell>`;
+        })
+        .join('');
+
       return `
       <Row>
         <Cell ss:StyleID="CenterText"><Data ss:Type="String">${posicao}</Data></Cell>
         <Cell ss:StyleID="BoldText"><Data ss:Type="String">${sanitize(r.name)}</Data></Cell>
         <Cell ss:StyleID="Number"><Data ss:Type="Number">${r.totalVotes}</Data></Cell>
-        <Cell ss:StyleID="Decimal"><Data ss:Type="${r.hasEvaluations ? 'Number' : 'String'}">${r.hasEvaluations ? r.rawInnovation?.toFixed(2) : 'Sem avaliações'}</Data></Cell>
-        <Cell ss:StyleID="Decimal"><Data ss:Type="${r.hasEvaluations ? 'Number' : 'String'}">${r.hasEvaluations ? r.rawImpact?.toFixed(2) : 'Sem avaliações'}</Data></Cell>
-        <Cell ss:StyleID="Decimal"><Data ss:Type="${r.hasEvaluations ? 'Number' : 'String'}">${r.hasEvaluations ? r.rawDevelopment?.toFixed(2) : 'Sem avaliações'}</Data></Cell>
+        ${criteriaCells}
         <Cell ss:StyleID="GeneralAverage"><Data ss:Type="${r.hasEvaluations ? 'Number' : 'String'}">${r.hasEvaluations ? r.rawGeneral?.toFixed(2) : 'Sem avaliações'}</Data></Cell>
-        <Cell ss:StyleID="Percent"><Data ss:Type="${r.hasEvaluations ? 'Number' : 'String'}">${r.hasEvaluations ? (r.rawPercentage! / 100).toFixed(4) : 'Sem avaliações'}</Data></Cell>
+        <Cell ss:StyleID="Percent"><Data ss:Type="${r.hasEvaluations ? 'Number' : 'String'}">${r.hasEvaluations && r.rawPercentage !== null ? (r.rawPercentage / 100).toFixed(4) : 'Sem avaliações'}</Data></Cell>
         <Cell ss:StyleID="PointsFinal"><Data ss:Type="${r.hasEvaluations ? 'Number' : 'String'}">${r.hasEvaluations ? r.rawPoints?.toFixed(2) : 'Sem avaliações'}</Data></Cell>
       </Row>`;
     })
     .join('');
 
-  const excelXml = `<?xml version="1.0" encoding="UTF-8"?>
+  const criteriaHeadersXml = criteriaColumns
+    .map((col) => `<Cell><Data ss:Type="String">${sanitize(col)} (1-5)</Data></Cell>`)
+    .join('');
+
+  return `<?xml version="1.0" encoding="UTF-8"?>
 <?mso-application progid="Excel.Sheet"?>
 <Workbook xmlns="urn:schemas-microsoft-com:office:spreadsheet"
  xmlns:o="urn:schemas-microsoft-com:office:office"
@@ -169,39 +222,46 @@ export function exportToExcel(
   </Style>
  </Styles>
  <Worksheet ss:Name="Voto Popular - Resultados">
-  <Table ss:ExpandedColumnCount="9" x:FullColumns="1" x:FullRows="1">
+  <Table ss:ExpandedColumnCount="${totalColumnCount}" x:FullColumns="1" x:FullRows="1">
    <Column ss:Width="60"/>
    <Column ss:Width="260"/>
    <Column ss:Width="90"/>
-   <Column ss:Width="110"/>
-   <Column ss:Width="110"/>
-   <Column ss:Width="120"/>
+   ${criteriaColumns.map(() => '<Column ss:Width="110"/>').join('')}
    <Column ss:Width="100"/>
    <Column ss:Width="100"/>
    <Column ss:Width="140"/>
    <Row ss:Height="26">
-    <Cell ss:MergeAcross="8" ss:StyleID="Title"><Data ss:Type="String">ARENA VOICE — VOTO POPULAR • RESULTADOS OFICIAIS</Data></Cell>
+    <Cell ss:MergeAcross="${totalColumnCount - 1}" ss:StyleID="Title"><Data ss:Type="String">ARENA VOICE — VOTO POPULAR • RESULTADOS OFICIAIS</Data></Cell>
    </Row>
    <Row ss:Height="18">
-    <Cell ss:MergeAcross="8" ss:StyleID="Subtitle"><Data ss:Type="String">Evento: ${sanitize(eventName)} | Emissão: ${new Date().toLocaleString('pt-BR')} | Máximo de 20 pontos (Pesos iguais nos 3 critérios)</Data></Cell>
+    <Cell ss:MergeAcross="${totalColumnCount - 1}" ss:StyleID="Subtitle"><Data ss:Type="String">Evento: ${sanitize(eventName)} | Emissão: ${new Date().toLocaleString('pt-BR')} | Voto Popular: ${effectiveWeight}% da nota (máximo de ${effectiveWeight} pontos)</Data></Cell>
    </Row>
    <Row ss:Height="10"/>
    <Row ss:Height="24" ss:StyleID="Header">
     <Cell><Data ss:Type="String">Posição</Data></Cell>
     <Cell><Data ss:Type="String">Projeto</Data></Cell>
     <Cell><Data ss:Type="String">Votos Válidos</Data></Cell>
-    <Cell><Data ss:Type="String">Inovação (1-5)</Data></Cell>
-    <Cell><Data ss:Type="String">Impacto (1-5)</Data></Cell>
-    <Cell><Data ss:Type="String">Salto Desenv. (1-5)</Data></Cell>
+    ${criteriaHeadersXml}
     <Cell><Data ss:Type="String">Média Geral</Data></Cell>
-    <Cell><Data ss:Type="String">% dos 20%</Data></Cell>
-    <Cell><Data ss:Type="String">Pontuação (20 pts)</Data></Cell>
+    <Cell><Data ss:Type="String">% dos ${effectiveWeight}%</Data></Cell>
+    <Cell><Data ss:Type="String">Pontuação (${effectiveWeight} pts)</Data></Cell>
    </Row>
    ${rowsXml}
   </Table>
  </Worksheet>
 </Workbook>`;
+}
 
+/**
+ * 2. Exportação em Excel (SpreadsheetML XML compatível com Microsoft Excel e Google Sheets)
+ */
+export function exportToExcel(
+  results: ProjectScoringResult[],
+  eventName: string = 'Arena Voice 2026',
+  popularVoteWeight?: number,
+  questions?: Array<{ id: string; title: string; position?: number }>
+): void {
+  const excelXml = buildExcelString(results, eventName, popularVoteWeight, questions);
   const filename = `arena-voice-resultados-${new Date().toISOString().slice(0, 10)}.xls`;
   triggerDownload(excelXml, filename, 'application/vnd.ms-excel');
 }
@@ -211,13 +271,18 @@ export function exportToExcel(
  */
 export function exportToPDF(
   results: ProjectScoringResult[],
-  eventName: string = 'Arena Voice 2026'
+  eventName: string = 'Arena Voice 2026',
+  popularVoteWeight?: number,
+  questions?: Array<{ id: string; title: string; position?: number }>
 ): void {
   const printWindow = window.open('', '_blank');
   if (!printWindow) {
     window.print();
     return;
   }
+
+  const effectiveWeight = popularVoteWeight ?? results[0]?.popularVoteWeight ?? 20;
+  const criteriaColumns = getCriteriaColumns(results, questions);
 
   const rowsHtml = results
     .map((r) => {
@@ -231,20 +296,28 @@ export function exportToPDF(
           : 'background: #333; color: #eee;';
 
       const rankText = r.rank !== null ? `${r.rank}º` : '-';
+      const criteriaTds = criteriaColumns
+        .map((col) => {
+          const found = r.criteriaScores?.find((c) => c.title === col);
+          return `<td style="text-align: center;">${r.hasEvaluations && found ? found.formatted : 'Sem avaliações'}</td>`;
+        })
+        .join('');
 
       return `
       <tr>
         <td style="text-align: center;"><span style="display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 11px; ${badgeColor}">${rankText}</span></td>
         <td style="font-weight: 600;">${r.name}</td>
         <td style="text-align: center;">${r.totalVotes}</td>
-        <td style="text-align: center;">${r.formattedInnovation}</td>
-        <td style="text-align: center;">${r.formattedImpact}</td>
-        <td style="text-align: center;">${r.formattedDevelopment}</td>
+        ${criteriaTds}
         <td style="text-align: center; font-weight: bold; background: #fafafa;">${r.formattedGeneral}</td>
         <td style="text-align: center;">${r.formattedPercentage}</td>
         <td style="text-align: center; font-weight: bold; font-size: 13px; color: #b8860b; background: #fffbe6;">${r.formattedPoints}</td>
       </tr>`;
     })
+    .join('');
+
+  const criteriaThs = criteriaColumns
+    .map((col) => `<th style="width: 80px;">${col}</th>`)
     .join('');
 
   const html = `<!DOCTYPE html>
@@ -351,12 +424,10 @@ export function exportToPDF(
         <th style="width: 50px;">Rank</th>
         <th>Projeto</th>
         <th style="width: 70px;">Votos</th>
-        <th style="width: 80px;">Inovação</th>
-        <th style="width: 80px;">Impacto</th>
-        <th style="width: 80px;">Salto Desenv.</th>
+        ${criteriaThs}
         <th style="width: 80px;">Média Geral</th>
         <th style="width: 80px;">% Voto Pop.</th>
-        <th style="width: 100px;">Pontos (20 pts)</th>
+        <th style="width: 100px;">Pontos (${effectiveWeight} pts)</th>
       </tr>
     </thead>
     <tbody>
@@ -366,9 +437,9 @@ export function exportToPDF(
 
   <div class="rules-box">
     <strong>Critérios e Diretrizes Oficiais:</strong><br/>
-    • O Voto Popular equivale estritamente a 20% da avaliação geral da Arena Voice (máximo de 20 pontos).<br/>
-    • Os 3 critérios avaliados possuem pesos estritamente iguais: <code>Média Geral = (Inovação + Impacto + Desenvolvimento) / 3</code>.<br/>
-    • <code>Pontuação = (Média Geral / 5) × 20</code> | <code>Percentual = (Média Geral / 5) × 100%</code>.<br/>
+    • O Voto Popular equivale estritamente a ${effectiveWeight}% da avaliação geral da Arena Voice (máximo de ${effectiveWeight} pontos).<br/>
+    • Critérios avaliados no evento: ${criteriaColumns.join(', ') || 'Critérios configurados'}.<br/>
+    • <code>Pontuação = (Média Geral / 5) × ${effectiveWeight}</code> | <code>Percentual = (Média Geral / 5) × 100%</code>.<br/>
     • Ordenação realizada com precisão matemática completa, respeitando empates reais na classificação.
   </div>
 

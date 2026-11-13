@@ -1055,7 +1055,7 @@ export const EventService = {
 
     const fetchResult = async () => {
       try {
-        const safeColumns = 'id, event_id, project_id, total_votes, sum_innovation, sum_impact, sum_development, average_innovation, average_impact, average_development, average_general, percentage, popular_points, updated_at';
+        const safeColumns = 'id, event_id, project_id, total_votes, sum_innovation, sum_impact, sum_development, average_innovation, average_impact, average_development, average_general, percentage, popular_points, questions_metrics, updated_at';
         const { data, error } = await supabase
           .from('results')
           .select(safeColumns)
@@ -1139,7 +1139,7 @@ export const EventService = {
 
     const fetchAllResults = async () => {
       try {
-        const safeColumns = 'id, event_id, project_id, total_votes, sum_innovation, sum_impact, sum_development, average_innovation, average_impact, average_development, average_general, percentage, popular_points, updated_at';
+        const safeColumns = 'id, event_id, project_id, total_votes, sum_innovation, sum_impact, sum_development, average_innovation, average_impact, average_development, average_general, percentage, popular_points, questions_metrics, updated_at';
         let resultsRows: any[] | null = null;
 
         const { data, error } = await supabase

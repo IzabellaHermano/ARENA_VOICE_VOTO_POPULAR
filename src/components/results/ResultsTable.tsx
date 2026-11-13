@@ -4,28 +4,25 @@ import { Table as TableIcon } from 'lucide-react';
 
 interface ResultsTableProps {
   results: ProjectScoringResult[];
+  questions?: Array<{ id: string; title: string; position?: number }>;
 }
 
-export const ResultsTable: React.FC<ResultsTableProps> = ({ results }) => {
+export const ResultsTable: React.FC<ResultsTableProps> = ({ results, questions }) => {
   const effectiveWeight = results[0]?.popularVoteWeight ?? 20;
 
-  // Extrai dinamicamente as colunas de critérios presentes nos resultados
+  // Extrai dinamicamente as colunas de critérios presentes no evento
   const criteriaColumns = useMemo(() => {
-    const hasDynamic = results.some((r) => r.criteriaScores && r.criteriaScores.length > 0);
-    if (hasDynamic) {
-      const titles = new Set<string>();
-      results.forEach((r) => {
-        r.criteriaScores?.forEach((c) => titles.add(c.title));
-      });
-      return Array.from(titles);
+    if (questions && questions.length > 0) {
+      return [...questions]
+        .sort((a, b) => (a.position ?? 0) - (b.position ?? 0))
+        .map((q) => q.title);
     }
-    return ['Inovação', 'Impacto CPTM', 'Salto Tecnol.'];
-  }, [results]);
-
-  const hasDynamic = useMemo(
-    () => results.some((r) => r.criteriaScores && r.criteriaScores.length > 0),
-    [results]
-  );
+    const titles = new Set<string>();
+    results.forEach((r) => {
+      r.criteriaScores?.forEach((c) => titles.add(c.title));
+    });
+    return Array.from(titles);
+  }, [questions, results]);
 
   return (
     <div className="bg-arena-card border border-arena-border rounded-2xl overflow-hidden shadow-xl space-y-3 p-4 sm:p-6">
@@ -111,28 +108,14 @@ export const ResultsTable: React.FC<ResultsTableProps> = ({ results }) => {
                     {row.totalVotes}
                   </td>
 
-                  {hasDynamic ? (
-                    criteriaColumns.map((col) => {
-                      const found = row.criteriaScores?.find((c) => c.title === col);
-                      return (
-                        <td key={col} className="py-3.5 px-3 text-center font-mono">
-                          {found ? found.formatted : 'Sem avaliações'}
-                        </td>
-                      );
-                    })
-                  ) : (
-                    <>
-                      <td className="py-3.5 px-3 text-center font-mono">
-                        {row.formattedInnovation}
+                  {criteriaColumns.map((col) => {
+                    const found = row.criteriaScores?.find((c) => c.title === col);
+                    return (
+                      <td key={col} className="py-3.5 px-3 text-center font-mono">
+                        {row.hasEvaluations && found ? found.formatted : 'Sem avaliações'}
                       </td>
-                      <td className="py-3.5 px-3 text-center font-mono">
-                        {row.formattedImpact}
-                      </td>
-                      <td className="py-3.5 px-3 text-center font-mono">
-                        {row.formattedDevelopment}
-                      </td>
-                    </>
-                  )}
+                    );
+                  })}
 
                   <td className="py-3.5 px-3 text-center font-mono font-extrabold text-white bg-white/5">
                     {row.formattedGeneral}

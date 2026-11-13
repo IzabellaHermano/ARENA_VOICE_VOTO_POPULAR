@@ -1,6 +1,6 @@
 import React from 'react';
 import { ProjectScoringResult } from '@/utils/scoring';
-import { Trophy, Award, Medal, Users, Lightbulb, TrendingUp, Rocket, AlertCircle } from 'lucide-react';
+import { Trophy, Award, Medal, Users, AlertCircle } from 'lucide-react';
 
 interface ProjectResultCardProps {
   project: ProjectScoringResult;
@@ -130,11 +130,21 @@ export const ProjectResultCard: React.FC<ProjectResultCardProps> = ({ project })
               </div>
             </div>
 
-            {/* Barras Horizontais dos Critérios (Dinâmicos ou Legados) */}
+            {/* Barras Horizontais dos Critérios Dinâmicos */}
             <div className="space-y-2 pt-1 text-xs">
               {project.criteriaScores && project.criteriaScores.length > 0 ? (
                 project.criteriaScores.map((c, idx) => {
-                  const colors = ['bg-arena-red', 'bg-arena-blue', 'bg-emerald-400', 'bg-purple-500', 'bg-amber-400'];
+                  const colors = [
+                    'bg-arena-red',
+                    'bg-arena-blue',
+                    'bg-emerald-400',
+                    'bg-purple-500',
+                    'bg-amber-400',
+                    'bg-pink-500',
+                    'bg-cyan-400',
+                    'bg-indigo-400',
+                    'bg-teal-400',
+                  ];
                   const color = colors[idx % colors.length];
                   return (
                     <div key={c.id || c.title}>
@@ -154,60 +164,7 @@ export const ProjectResultCard: React.FC<ProjectResultCardProps> = ({ project })
                     </div>
                   );
                 })
-              ) : (
-                <>
-                  {/* Inovação */}
-                  <div>
-                    <div className="flex justify-between items-center text-[11px] mb-1">
-                      <span className="flex items-center gap-1.5 text-gray-300 font-medium">
-                        <Lightbulb className="w-3 h-3 text-arena-red" />
-                        Inovação
-                      </span>
-                      <span className="font-bold text-white">{project.formattedInnovation}</span>
-                    </div>
-                    <div className="w-full h-1.5 rounded-full bg-white/10 overflow-hidden">
-                      <div
-                        className="h-full rounded-full bg-arena-red transition-all duration-500"
-                        style={{ width: `${((project.rawInnovation || 0) / 5) * 100}%` }}
-                      />
-                    </div>
-                  </div>
-
-                  {/* Impacto */}
-                  <div>
-                    <div className="flex justify-between items-center text-[11px] mb-1">
-                      <span className="flex items-center gap-1.5 text-gray-300 font-medium">
-                        <TrendingUp className="w-3 h-3 text-arena-blue" />
-                        Impacto CPTM
-                      </span>
-                      <span className="font-bold text-white">{project.formattedImpact}</span>
-                    </div>
-                    <div className="w-full h-1.5 rounded-full bg-white/10 overflow-hidden">
-                      <div
-                        className="h-full rounded-full bg-arena-blue transition-all duration-500"
-                        style={{ width: `${((project.rawImpact || 0) / 5) * 100}%` }}
-                      />
-                    </div>
-                  </div>
-
-                  {/* Salto de Desenvolvimento */}
-                  <div>
-                    <div className="flex justify-between items-center text-[11px] mb-1">
-                      <span className="flex items-center gap-1.5 text-gray-300 font-medium">
-                        <Rocket className="w-3 h-3 text-emerald-400" />
-                        Salto Tecnológico
-                      </span>
-                      <span className="font-bold text-white">{project.formattedDevelopment}</span>
-                    </div>
-                    <div className="w-full h-1.5 rounded-full bg-white/10 overflow-hidden">
-                      <div
-                        className="h-full rounded-full bg-emerald-400 transition-all duration-500"
-                        style={{ width: `${((project.rawDevelopment || 0) / 5) * 100}%` }}
-                      />
-                    </div>
-                  </div>
-                </>
-              )}
+              ) : null}
             </div>
           </div>
         ) : (

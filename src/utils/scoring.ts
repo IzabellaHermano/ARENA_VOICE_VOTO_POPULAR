@@ -90,7 +90,8 @@ export function formatPercent(value: number | null | undefined, fallback: string
 export function calculateProjectScore(
   project: { id?: string; name: string; description?: string; bannerUrl?: string; order?: number; active?: boolean },
   resultDoc?: Partial<ResultDocument> | null,
-  eventPopularWeight: number = 20
+  eventPopularWeight: number = 20,
+  configuredQuestions?: Array<{ id: string; title: string; position?: number }>
 ): ProjectScoringResult {
   const projectId = project.id || '';
   const totalVotes = resultDoc?.totalVotes || 0;
@@ -99,8 +100,22 @@ export function calculateProjectScore(
       ? Number(resultDoc.popularVoteWeight)
       : eventPopularWeight;
 
+  // Ordena perguntas configuradas pela posição se informadas
+  const sortedQuestions = configuredQuestions
+    ? [...configuredQuestions].sort((a, b) => (a.position ?? 0) - (b.position ?? 0))
+    : undefined;
+
   // Caso 1: Projeto sem avaliações
   if (totalVotes === 0) {
+    const defaultScores: CriterionScoreItem[] | undefined = sortedQuestions && sortedQuestions.length > 0
+      ? sortedQuestions.map((q) => ({
+          id: q.id,
+          title: q.title,
+          average: null,
+          formatted: 'Sem avaliações',
+        }))
+      : undefined;
+
     return {
       projectId,
       name: project.name,
@@ -110,6 +125,7 @@ export function calculateProjectScore(
       active: project.active ?? true,
       totalVotes: 0,
       hasEvaluations: false,
+      criteriaScores: defaultScores,
       popularVoteWeight: effectivePopularWeight,
       rawInnovation: null,
       rawImpact: null,
@@ -145,14 +161,50 @@ export function calculateProjectScore(
       ? resultDoc.sumDevelopment
       : (resultDoc?.averageDevelopment || 0) * totalVotes;
 
-  // Médias individuais dos três critérios (pesos iguais)
-  const rawInnovation = sumInnovation / totalVotes;
-  const rawImpact = sumImpact / totalVotes;
-  const rawDevelopment = sumDevelopment / totalVotes;
+  // Médias individuais clássicas (legadas)
+  const rawInnovation = totalVotes > 0 ? sumInnovation / totalVotes : null;
+  const rawImpact = totalVotes > 0 ? sumImpact / totalVotes : null;
+  const rawDevelopment = totalVotes > 0 ? sumDevelopment / totalVotes : null;
 
-  // Critérios dinâmicos (se fornecidos pelo backend)
+  // Critérios dinâmicos (Etapa 3 / Etapa 5)
   let criteriaScores: CriterionScoreItem[] | undefined = undefined;
-  if (resultDoc?.questionsMetrics && Array.isArray(resultDoc.questionsMetrics) && resultDoc.questionsMetrics.length > 0) {
+
+  if (sortedQuestions && sortedQuestions.length > 0) {
+    // Alinha estritamente com as perguntas cadastradas para o evento
+    criteriaScores = sortedQuestions.map((q) => {
+      const qm = (resultDoc?.questionsMetrics || []).find(
+        (m: any) => m.question_id === q.id || m.id === q.id || m.title === q.title
+      );
+
+      if (qm && typeof qm.average_score === 'number') {
+        return {
+          id: q.id,
+          title: q.title,
+          average: qm.average_score,
+          formatted: formatScore(qm.average_score),
+        };
+      }
+
+      // Fallback para métricas históricas de inovação/impacto/desenvolvimento
+      const lower = q.title.toLowerCase();
+      if (lower.includes('inova') && rawInnovation !== null) {
+        return { id: q.id, title: q.title, average: rawInnovation, formatted: formatScore(rawInnovation) };
+      }
+      if (lower.includes('impact') && rawImpact !== null) {
+        return { id: q.id, title: q.title, average: rawImpact, formatted: formatScore(rawImpact) };
+      }
+      if ((lower.includes('desenv') || lower.includes('tecnol')) && rawDevelopment !== null) {
+        return { id: q.id, title: q.title, average: rawDevelopment, formatted: formatScore(rawDevelopment) };
+      }
+
+      return {
+        id: q.id,
+        title: q.title,
+        average: null,
+        formatted: 'Sem avaliações',
+      };
+    });
+  } else if (resultDoc?.questionsMetrics && Array.isArray(resultDoc.questionsMetrics) && resultDoc.questionsMetrics.length > 0) {
     criteriaScores = resultDoc.questionsMetrics.map((qm: any) => ({
       id: qm.question_id || qm.id || '',
       title: qm.title || 'Critério',
@@ -161,23 +213,39 @@ export function calculateProjectScore(
     }));
   }
 
-  // Média Geral = soma de todas as notas válidas / quantidade total de respostas válidas
+  // Média Geral = soma de todas as notas válidas / quantidade total de critérios avaliados
+  let calculatedGeneral: number | null = null;
+  if (criteriaScores && criteriaScores.length > 0) {
+    const validScores = criteriaScores.filter((c) => c.average !== null);
+    if (validScores.length > 0) {
+      calculatedGeneral = validScores.reduce((acc, c) => acc + c.average!, 0) / validScores.length;
+    }
+  }
+
+  if (calculatedGeneral === null && rawInnovation !== null && rawImpact !== null && rawDevelopment !== null) {
+    calculatedGeneral = (rawInnovation + rawImpact + rawDevelopment) / 3;
+  }
+
   const rawGeneral =
     resultDoc?.averageGeneral !== undefined && resultDoc.averageGeneral !== null
       ? resultDoc.averageGeneral
-      : (rawInnovation + rawImpact + rawDevelopment) / 3;
+      : calculatedGeneral;
 
   // Percentual = (Média Geral / 5) * 100
   const rawPercentage =
     resultDoc?.percentage !== undefined && resultDoc.percentage !== null
       ? resultDoc.percentage
-      : (rawGeneral / 5) * 100;
+      : rawGeneral !== null
+      ? (rawGeneral / 5) * 100
+      : null;
 
-  // Pontos do Voto Popular = (Média Geral / 5) * peso configurado (máximo popularWeight pontos)
+  // Pontos do Voto Popular = (Média Geral / 5) * peso configurado
   const rawPoints =
     resultDoc?.popularPoints !== undefined && resultDoc.popularPoints !== null
       ? resultDoc.popularPoints
-      : (rawGeneral / 5) * effectivePopularWeight;
+      : rawGeneral !== null
+      ? (rawGeneral / 5) * effectivePopularWeight
+      : null;
 
   return {
     projectId,
@@ -272,7 +340,8 @@ export function rankProjects(items: ProjectScoringResult[]): ProjectScoringResul
 export function buildRankedResults(
   projects: (ProjectDocument | { id: string; name: string; description?: string; bannerUrl?: string; order?: number; active?: boolean })[],
   resultsMap: Map<string, Partial<ResultDocument>> | Record<string, Partial<ResultDocument>>,
-  eventPopularWeight: number = 20
+  eventPopularWeight: number = 20,
+  configuredQuestions?: Array<{ id: string; title: string; position?: number }>
 ): ProjectScoringResult[] {
   const getDoc = (id: string): Partial<ResultDocument> | undefined => {
     if (resultsMap instanceof Map) {
@@ -283,7 +352,7 @@ export function buildRankedResults(
 
   const calculated = projects.map((project) => {
     const resDoc = getDoc(project.id || '');
-    return calculateProjectScore(project, resDoc, eventPopularWeight);
+    return calculateProjectScore(project, resDoc, eventPopularWeight, configuredQuestions);
   });
 
   return rankProjects(calculated);

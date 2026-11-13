@@ -373,6 +373,65 @@ export const QuestionService = {
     this.applyLocalReorder(eventId, questionIds);
   },
 
+  /**
+   * Monitora em tempo real as perguntas do evento
+   */
+  subscribeToQuestions(
+    eventId: string,
+    onUpdate: (questions: EventQuestion[]) => void,
+    onError?: (err: Error) => void
+  ): () => void {
+    if (!eventId) {
+      onUpdate([]);
+      return () => {};
+    }
+
+    let isSubscribed = true;
+
+    const fetchAll = async () => {
+      try {
+        const list = await this.listQuestions(eventId, false);
+        if (isSubscribed) {
+          onUpdate(list);
+        }
+      } catch (err: any) {
+        if (isSubscribed && onError) onError(err);
+      }
+    };
+
+    fetchAll();
+
+    if (!isSupabaseConfigured) {
+      return () => {
+        isSubscribed = false;
+      };
+    }
+
+    const channelId = `event_questions_sub_${eventId}_${Date.now()}`;
+    const channel = supabase
+      .channel(channelId)
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'event_questions',
+          filter: `event_id=eq.${eventId}`,
+        },
+        () => {
+          if (isSubscribed) {
+            fetchAll();
+          }
+        }
+      )
+      .subscribe();
+
+    return () => {
+      isSubscribed = false;
+      supabase.removeChannel(channel);
+    };
+  },
+
   // =========================================================================
   // PERSISTÊNCIA LOCAL ISOLADA POR EVENTO
   // =========================================================================

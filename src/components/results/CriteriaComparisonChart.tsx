@@ -14,27 +14,37 @@ import { BarChart3 } from 'lucide-react';
 
 interface CriteriaComparisonChartProps {
   projects: ProjectScoringResult[];
+  questions?: Array<{ id: string; title: string; position?: number }>;
 }
 
-const CRITERIA_COLORS = ['#F20524', '#00B8F5', '#00E676', '#9C27B0', '#FF9800', '#E91E63', '#00BCD4'];
+const CRITERIA_COLORS = [
+  '#F20524', // Arena Red
+  '#00B8F5', // Cyan / Arena Blue
+  '#00E676', // Emerald Green
+  '#9C27B0', // Purple
+  '#FF9800', // Amber Orange
+  '#E91E63', // Pink
+  '#00BCD4', // Teal
+  '#3F51B5', // Indigo
+  '#8BC34A', // Light Green
+  '#FF5722', // Deep Orange
+];
 
-export const CriteriaComparisonChart: React.FC<CriteriaComparisonChartProps> = ({ projects }) => {
-  // Identifica a lista de critérios (dinâmicos ou legados)
-  const hasDynamicCriteria = useMemo(
-    () => projects.some((p) => p.criteriaScores && p.criteriaScores.length > 0),
-    [projects]
-  );
-
+export const CriteriaComparisonChart: React.FC<CriteriaComparisonChartProps> = ({ projects, questions }) => {
+  // Extrai dinamicamente as chaves de critérios configuradas no evento
   const criteriaKeys = useMemo(() => {
-    if (hasDynamicCriteria) {
-      const keys = new Set<string>();
-      projects.forEach((p) => {
-        p.criteriaScores?.forEach((c) => keys.add(c.title));
-      });
-      return Array.from(keys);
+    if (questions && questions.length > 0) {
+      return [...questions]
+        .sort((a, b) => (a.position ?? 0) - (b.position ?? 0))
+        .map((q) => q.title);
     }
-    return ['Inovação', 'Impacto', 'Desenvolvimento'];
-  }, [hasDynamicCriteria, projects]);
+
+    const keys = new Set<string>();
+    projects.forEach((p) => {
+      p.criteriaScores?.forEach((c) => keys.add(c.title));
+    });
+    return Array.from(keys);
+  }, [questions, projects]);
 
   // Filtra projetos avaliados para o gráfico
   const data = useMemo(() => {
@@ -47,25 +57,25 @@ export const CriteriaComparisonChart: React.FC<CriteriaComparisonChartProps> = (
           'Média Geral': p.rawGeneral ? Number(p.rawGeneral.toFixed(2)) : 0,
         };
 
-        if (p.criteriaScores && p.criteriaScores.length > 0) {
-          p.criteriaScores.forEach((c) => {
-            item[c.title] = c.average ? Number(c.average.toFixed(2)) : 0;
-          });
-        } else {
-          item['Inovação'] = p.rawInnovation ? Number(p.rawInnovation.toFixed(2)) : 0;
-          item['Impacto'] = p.rawImpact ? Number(p.rawImpact.toFixed(2)) : 0;
-          item['Desenvolvimento'] = p.rawDevelopment ? Number(p.rawDevelopment.toFixed(2)) : 0;
-        }
+        criteriaKeys.forEach((key) => {
+          const found = p.criteriaScores?.find((c) => c.title === key);
+          item[key] = found && found.average !== null ? Number(found.average.toFixed(2)) : 0;
+        });
 
         return item;
       });
-  }, [projects]);
+  }, [projects, criteriaKeys]);
 
   if (data.length === 0) {
     return (
       <div className="bg-arena-card border border-arena-border rounded-2xl p-8 text-center text-gray-400">
         <BarChart3 className="w-8 h-8 mx-auto text-gray-600 mb-2" />
         <p className="text-sm font-semibold">Nenhum projeto com avaliações para comparação gráfica.</p>
+        {criteriaKeys.length > 0 && (
+          <p className="text-xs text-gray-500 mt-2">
+            Critérios do evento: <span className="text-gray-300 font-medium">{criteriaKeys.join(' • ')}</span>
+          </p>
+        )}
       </div>
     );
   }

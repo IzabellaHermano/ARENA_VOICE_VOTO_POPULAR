@@ -5,6 +5,8 @@ import { EventService, DEFAULT_EVENT_ID, mapResultRow } from '@/services/eventSe
 import { useAdminEvent } from '@/contexts/AdminEventContext';
 import { ProjectDocument, ResultDocument, EventDocument, EventSettings } from '@/types';
 import { SettingsService } from '@/services/settingsService';
+import { QuestionService } from '@/services/questionService';
+import { EventQuestion } from '@/types/supabase';
 import { buildRankedResults, ProjectScoringResult } from '@/utils/scoring';
 import {
   PublishResultsBanner,
@@ -39,16 +41,40 @@ export const AdminResultsPage: React.FC = () => {
   const [activeEvent, setActiveEvent] = useState<EventDocument | null>(null);
   const [projects, setProjects] = useState<ProjectDocument[]>([]);
   const [resultsList, setResultsList] = useState<ResultDocument[]>([]);
+  const [questions, setQuestions] = useState<EventQuestion[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isUpdatingPublish, setIsUpdatingPublish] = useState(false);
   const [isExportModalOpen, setIsExportModalOpen] = useState(false);
   const [activeTab, setActiveTab] = useState<'cards' | 'charts' | 'table'>('cards');
   const [eventSettings, setEventSettings] = useState<EventSettings | null>(null);
 
+  // Limpa o cache ao alternar de evento para evitar mistura de dados (Teste C)
+  useEffect(() => {
+    setProjects([]);
+    setResultsList([]);
+    setQuestions([]);
+    setActiveEvent(null);
+    setEventSettings(null);
+    setIsLoading(true);
+  }, [activeEventId]);
+
   // Carrega configurações do evento ativo
   useEffect(() => {
     if (!activeEventId) return;
     SettingsService.getSettings(activeEventId).then(setEventSettings).catch(console.warn);
+  }, [activeEventId]);
+
+  // Carrega e monitora perguntas/critérios configurados do evento ativo
+  useEffect(() => {
+    if (!activeEventId) return;
+    const unsub = QuestionService.subscribeToQuestions(
+      activeEventId,
+      (qs) => {
+        setQuestions(qs || []);
+      },
+      (err) => console.warn('Aviso subscribeToQuestions:', err)
+    );
+    return () => unsub();
   }, [activeEventId]);
 
   // 1. Escuta o evento em tempo real (para status de publicação resultsPublished)
@@ -101,8 +127,13 @@ export const AdminResultsPage: React.FC = () => {
     resultsList.forEach((r) => {
       resultsMap.set(r.projectId, r);
     });
-    return buildRankedResults(projects, resultsMap, eventSettings?.popularVoteWeight ?? 20);
-  }, [projects, resultsList, eventSettings?.popularVoteWeight]);
+    return buildRankedResults(
+      projects,
+      resultsMap,
+      eventSettings?.popularVoteWeight ?? 20,
+      questions
+    );
+  }, [projects, resultsList, eventSettings?.popularVoteWeight, questions]);
 
   // Estatísticas Rápidas
   const totalVotesCount = useMemo(() => {
@@ -278,7 +309,7 @@ export const AdminResultsPage: React.FC = () => {
           {/* Conteúdo da Aba: Gráficos Comparativos */}
           {activeTab === 'charts' && (
             <div className="space-y-6 animate-fade-in">
-              <CriteriaComparisonChart projects={rankedResults} />
+              <CriteriaComparisonChart projects={rankedResults} questions={questions} />
               <ParticipationChart projects={rankedResults} />
             </div>
           )}
@@ -286,7 +317,7 @@ export const AdminResultsPage: React.FC = () => {
           {/* Conteúdo da Aba: Tabela Detalhada */}
           {activeTab === 'table' && (
             <div className="animate-fade-in">
-              <ResultsTable results={rankedResults} />
+              <ResultsTable results={rankedResults} questions={questions} />
             </div>
           )}
         </>
@@ -298,6 +329,8 @@ export const AdminResultsPage: React.FC = () => {
         onClose={() => setIsExportModalOpen(false)}
         results={rankedResults}
         eventName={activeEvent?.name || 'Arena Voice 2026'}
+        popularVoteWeight={eventSettings?.popularVoteWeight ?? 20}
+        questions={questions}
       />
     </div>
   );
