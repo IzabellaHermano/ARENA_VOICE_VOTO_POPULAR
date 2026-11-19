@@ -22,6 +22,7 @@ Este documento registra o status de execução de cada uma das 9 etapas de desen
 - [x] **Nova Arquitetura — Etapa 4: Correção do Motor de Votação e Sincronização em Tempo Real** (Concluída e Homologada ✅)
 - [x] **Nova Arquitetura — Etapa 1: Votação, Apuração e Eventos Simultâneos** (Concluída e Homologada ✅)
 - [x] **Nova Arquitetura — Etapa 2: Usuários, Vínculo com Eventos e RBAC Multi-Evento** (Concluída e Homologada ✅)
+- [x] **Nova Arquitetura — Etapa 3: Gerenciamento de Eventos e Upload de Imagens** (Concluída e Homologada ✅)
 
 ---
 
@@ -465,4 +466,70 @@ Este documento registra o status de execução de cada uma das 9 etapas de desen
 
 ---
 
-**Status Atual:** Etapa 2 (Usuários, Vínculo com Eventos e RBAC Multi-Evento) 100% implementada, testada e homologada com sucesso no Supabase. Build de produção concluído com 0 erros.
+### Detalhamento da Nova Arquitetura — Etapa 3: Gerenciamento de Eventos e Upload de Imagens ✅
+
+#### 1. Correção e Salvaguarda da Exclusão de Eventos
+- **Identificação da Causa Raiz:**
+  - Inexistência de botão de exclusão e modal de confirmação no card de eventos em [`src/pages/admin/AdminEventsPage.tsx`](file:///c:/Users/IZABELLAA/Documents/ARENA_VOICE_VOTO_POPULAR/src/pages/admin/AdminEventsPage.tsx).
+  - Ausência do método `deleteEvent` e de checagem prévia de integridade no serviço [`src/services/eventService.ts`](file:///c:/Users/IZABELLAA/Documents/ARENA_VOICE_VOTO_POPULAR/src/services/eventService.ts).
+- **Proteção Rigorosa de Histórico e Auditoria:**
+  - Implementação de `EventService.checkEventHistory(eventId)` que inspeciona em tempo real contagens de votos, rodadas, resultados e projetos vinculados.
+  - **Bloqueio Estrito de Exclusão Física:** Se o evento possuir histórico de votação (`votesCount > 0` ou `roundsCount > 0`), a exclusão definitiva é totalmente bloqueada para impedir a destruição de dados de votação e quebra de conformidade.
+  - **Alternativa Aprovada (Arquivamento):** Para eventos com histórico, o sistema oferece a opção de "Arquivar Evento" (`status = 'finished'`), retirando o evento de circulação sem apagar votos nem violar a rastreabilidade.
+  - **Exclusão Segura de Eventos Sem Histórico:** Para eventos em rascunho ou sem rodadas/votos computados, o sistema executa a exclusão definitiva com limpeza segura de registros filhos (`event_questions`, `event_admins`, `event_settings`, `projects`) e exclusão em `public.events`.
+  - **Feedback Real e Atualização Imediata:** A listagem local de eventos é atualizada instantaneamente sem exigir recarregamento da página. Em caso de falha, o sistema nunca exibe mensagem de sucesso.
+- **Controle de Acesso RBAC:**
+  - O botão e as ações de exclusão são restritos com exclusividade ao `superadmin`. Operadores e administradores comuns não possuem acesso.
+
+#### 2. Upload de Imagem no Banner do Evento
+- **Novo Componente [`src/components/admin/EventBannerUpload.tsx`](file:///c:/Users/IZABELLAA/Documents/ARENA_VOICE_VOTO_POPULAR/src/components/admin/EventBannerUpload.tsx):**
+  - Seleção de imagem diretamente do computador e suporte completo a Drag and Drop.
+  - Validação estrita no cliente:
+    - Formatos de mídia permitidos: PNG, JPG/JPEG e WEBP.
+    - Extensões bloqueadas: executáveis, scripts, PDFs e arquivos de texto.
+    - Limite máximo de tamanho de 5 MB rigorosamente aplicado.
+    - Validação de imagem real decodificável pelo browser (`validateIsRealImage`).
+  - Pré-visualização instantânea na proporção ideal 16:9.
+  - Ações inline de "Substituir Imagem" e "Remover".
+  - Envio direto para o bucket oficial `project-banners` sob o prefixo `banners/event_[timestamp]_[nome].png`.
+  - Geração de URL pública permanente do Supabase Storage.
+  - Prevenção contra arquivos órfãos: remoção automática do arquivo anterior caso o usuário substitua antes de salvar.
+- **Persistência Resiliente dos Metadados do Evento:**
+  - Tratamento inteligente em `EventService.createEvent`, `updateEvent` e `mapEventRow` para garantir a persistência completa de `bannerUrl`, `subtitle` e `eventDate` no PostgreSQL, sobrevivendo a recarregamentos de página, logout e novas sessões.
+
+#### 3. Homologação Automatizada ([`scripts/testEtapa3EventManagement.mjs`](file:///c:/Users/IZABELLAA/Documents/ARENA_VOICE_VOTO_POPULAR/scripts/testEtapa3EventManagement.mjs))
+- Suíte completa com **30 testes aprovados com 100% de sucesso**:
+  1. [x] Validação de tipo MIME e extensão para PNG (permitido).
+  2. [x] Validação de tipo MIME e extensão para JPEG/JPG (permitido).
+  3. [x] Validação de tipo MIME e extensão para WEBP (permitido).
+  4. [x] Bloqueio de arquivos PDF.
+  5. [x] Bloqueio de executáveis (.exe).
+  6. [x] Bloqueio de arquivos de texto (.txt).
+  7. [x] Arquivo de 1.2 MB aceito no limite.
+  8. [x] Arquivo de 5.0 MB aceito no limite exato.
+  9. [x] Arquivo de 5.1 MB rejeitado por exceder 5 MB.
+  10. [x] Autenticação de Superadmin no Supabase.
+  11. [x] Upload real de imagem de banner no Supabase Storage.
+  12. [x] Geração e validação de URL pública permanente.
+  13. [x] Cadastro de novo evento com banner associado.
+  14. [x] Consulta direta no Supabase simulando reload completo.
+  15. [x] Banner persistido idêntico ao gravado após recarregamento.
+  16. [x] Subtítulo persistido corretamente.
+  17. [x] Data do evento persistida corretamente.
+  18. [x] Descrição limpa sem tags internas.
+  19. [x] Atualização de evento com novo banner substituído.
+  20. [x] Banner substituído lido com precisão.
+  21. [x] Remoção de banner efetuada com sucesso.
+  22. [x] Diagnóstico de histórico em evento com votos reais.
+  23. [x] Bloqueio estrito de exclusão física para evento com histórico de votação.
+  24. [x] Preservação intacta do evento e histórico no banco.
+  25. [x] Diagnóstico de evento sem histórico (apto para exclusão segura).
+  26. [x] Exclusão física de evento sem histórico executada com sucesso.
+  27. [x] Confirmação no banco de dados de que o evento foi removido.
+  28. [x] Limpeza de arquivos temporários no storage evitando órfãos.
+  29. [x] Bloqueio de operadores na exclusão de eventos (RBAC).
+  30. [x] Bloqueio de administradores não-superadmin na exclusão de eventos (RBAC).
+
+---
+
+**Status Atual:** Etapa 3 (Gerenciamento de Eventos e Upload de Imagens) 100% implementada, testada e homologada com sucesso no Supabase. Build de produção concluído com 0 erros.

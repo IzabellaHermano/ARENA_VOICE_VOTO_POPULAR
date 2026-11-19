@@ -79,17 +79,74 @@ export interface ProjectHistoryCheck {
   summary: string;
 }
 
+export interface EventHistoryCheck {
+  hasHistory: boolean;
+  canDelete: boolean;
+  projectsCount: number;
+  roundsCount: number;
+  votesCount: number;
+  resultsCount: number;
+  summary: string;
+}
+
 export type Unsubscribe = () => void;
+
+function encodeEventMeta(
+  description: string,
+  meta: { bannerUrl?: string; subtitle?: string; eventDate?: string }
+): string {
+  let existingMeta: any = {};
+  let cleanDesc = description || '';
+  const match = cleanDesc.match(/<!--arena-meta:(\{.*?\})-->/s);
+  if (match) {
+    try {
+      existingMeta = JSON.parse(match[1]);
+      cleanDesc = cleanDesc.replace(/<!--arena-meta:\{.*?\}-->/s, '').trim();
+    } catch {}
+  }
+  const mergedMeta = { ...existingMeta };
+  if (meta.bannerUrl !== undefined) mergedMeta.bannerUrl = meta.bannerUrl;
+  if (meta.subtitle !== undefined) mergedMeta.subtitle = meta.subtitle;
+  if (meta.eventDate !== undefined) mergedMeta.eventDate = meta.eventDate;
+
+  if (!mergedMeta.bannerUrl) delete mergedMeta.bannerUrl;
+  if (!mergedMeta.subtitle) delete mergedMeta.subtitle;
+  if (!mergedMeta.eventDate) delete mergedMeta.eventDate;
+
+  if (Object.keys(mergedMeta).length > 0) {
+    return `${cleanDesc} <!--arena-meta:${JSON.stringify(mergedMeta)}-->`.trim();
+  }
+  return cleanDesc;
+}
 
 // Utilitários de mapeamento entre colunas do PostgreSQL (snake_case) e Interfaces TypeScript (camelCase)
 function mapEventRow(row: any): EventDocument {
+  let description = row.description || '';
+  let subtitle = row.subtitle || '';
+  let eventDate = row.event_date || null;
+  let bannerUrl = row.banner_url || '';
+
+  // Decodifica metadados incorporados na descrição (persistência resiliente de banner, subtitle e data)
+  const metaMatch = description.match(/<!--arena-meta:(\{.*?\})-->/s);
+  if (metaMatch) {
+    try {
+      const meta = JSON.parse(metaMatch[1]);
+      if (!bannerUrl && meta.bannerUrl) bannerUrl = meta.bannerUrl;
+      if (!subtitle && meta.subtitle) subtitle = meta.subtitle;
+      if (!eventDate && meta.eventDate) eventDate = meta.eventDate;
+      description = description.replace(/<!--arena-meta:\{.*?\}-->/s, '').trim();
+    } catch (err) {
+      console.warn('Aviso ao decodificar metadados do evento:', err);
+    }
+  }
+
   return {
     id: row.id,
     name: row.name,
-    description: row.description || '',
-    subtitle: row.subtitle || '',
-    eventDate: row.event_date || null,
-    bannerUrl: row.banner_url || '',
+    description,
+    subtitle,
+    eventDate,
+    bannerUrl,
     status: row.status,
     currentRoundId: row.current_round_id || null,
     currentProjectId: row.current_project_id || null,
@@ -406,10 +463,16 @@ export const EventService = {
 
     const status = payload.status || 'draft';
 
+    const descWithMeta = encodeEventMeta(payload.description?.trim() || '', {
+      bannerUrl: payload.bannerUrl?.trim(),
+      subtitle: payload.subtitle?.trim(),
+      eventDate: payload.eventDate,
+    });
+
     const insertPayload: Record<string, any> = {
       id,
       name: trimmedName,
-      description: payload.description?.trim() || '',
+      description: descWithMeta,
       status: status === 'archived' ? 'draft' : status,
       results_published: false,
       created_at: new Date().toISOString(),
@@ -428,13 +491,13 @@ export const EventService = {
 
     if (error) {
       // Se deu erro por coluna opcional não existente (ex.: subtitle, event_date), tenta fallback apenas com colunas padrão
-      if (error.message.includes('column') || error.code === '42703') {
+      if (error.message.includes('column') || error.code === '42703' || error.code === 'PGRST204') {
         const { data: fallbackData, error: fallbackError } = await supabase
           .from('events')
           .insert({
             id,
             name: trimmedName,
-            description: payload.description?.trim() || (payload.subtitle ? `${payload.subtitle} - ${payload.description || ''}` : ''),
+            description: descWithMeta,
             status: status === 'archived' ? 'draft' : status,
             results_published: false,
           })
@@ -467,12 +530,37 @@ export const EventService = {
   async updateEvent(eventId: string, payload: UpdateEventPayload): Promise<EventDocument> {
     if (!eventId) throw new Error('ID do evento é obrigatório.');
 
+    // Se o bannerUrl, subtitle, eventDate ou description foram passados, busca a descrição existente para mesclar os metadados
+    let existingDesc = '';
+    if (
+      payload.bannerUrl !== undefined ||
+      payload.subtitle !== undefined ||
+      payload.eventDate !== undefined ||
+      payload.description !== undefined
+    ) {
+      try {
+        const { data: currentEv } = await supabase
+          .from('events')
+          .select('description')
+          .eq('id', eventId)
+          .maybeSingle();
+        existingDesc = currentEv?.description || '';
+      } catch {}
+    }
+
+    const baseDesc = payload.description !== undefined ? payload.description.trim() : existingDesc;
+    const descWithMeta = encodeEventMeta(baseDesc, {
+      bannerUrl: payload.bannerUrl !== undefined ? payload.bannerUrl.trim() : undefined,
+      subtitle: payload.subtitle !== undefined ? payload.subtitle.trim() : undefined,
+      eventDate: payload.eventDate,
+    });
+
     const updatePayload: Record<string, any> = {
       updated_at: new Date().toISOString(),
+      description: descWithMeta,
     };
 
     if (payload.name !== undefined) updatePayload.name = payload.name.trim();
-    if (payload.description !== undefined) updatePayload.description = payload.description.trim();
     if (payload.status !== undefined) {
       updatePayload.status = payload.status === 'archived' ? 'draft' : payload.status;
     }
@@ -490,12 +578,12 @@ export const EventService = {
 
     if (error) {
       // Fallback caso alguma coluna opcional ainda não exista no schema
-      if (error.message.includes('column') || error.code === '42703') {
+      if (error.message.includes('column') || error.code === '42703' || error.code === 'PGRST204') {
         const minimalPayload: Record<string, any> = {
           updated_at: new Date().toISOString(),
+          description: descWithMeta,
         };
         if (payload.name !== undefined) minimalPayload.name = payload.name.trim();
-        if (payload.description !== undefined) minimalPayload.description = payload.description.trim();
         if (payload.status !== undefined) minimalPayload.status = payload.status === 'archived' ? 'draft' : payload.status;
         if (payload.resultsPublished !== undefined) minimalPayload.results_published = payload.resultsPublished;
 
@@ -514,6 +602,155 @@ export const EventService = {
     }
 
     return mapEventRow(data);
+  },
+
+  /**
+   * Diagnostica a integridade e histórico de um evento antes de exclusão.
+   * Identifica projetos, rodadas, votos e resultados vinculados.
+   */
+  async checkEventHistory(eventId: string): Promise<EventHistoryCheck> {
+    if (!eventId) {
+      return {
+        hasHistory: false,
+        canDelete: false,
+        projectsCount: 0,
+        roundsCount: 0,
+        votesCount: 0,
+        resultsCount: 0,
+        summary: 'Identificador do evento não informado.',
+      };
+    }
+
+    if (!isSupabaseConfigured) {
+      return {
+        hasHistory: false,
+        canDelete: true,
+        projectsCount: 0,
+        roundsCount: 0,
+        votesCount: 0,
+        resultsCount: 0,
+        summary: 'Supabase não conectado.',
+      };
+    }
+
+    try {
+      const [projectsRes, roundsRes, resultsRes, votesRes] = await Promise.all([
+        supabase.from('projects').select('id', { count: 'exact', head: true }).eq('event_id', eventId),
+        supabase.from('rounds').select('id', { count: 'exact', head: true }).eq('event_id', eventId),
+        supabase.from('results').select('id, total_votes').eq('event_id', eventId),
+        supabase.from('votes').select('id', { count: 'exact', head: true }).eq('event_id', eventId),
+      ]);
+
+      const projectsCount = projectsRes.count || 0;
+      const roundsCount = roundsRes.count || 0;
+      let votesCount = votesRes.count || 0;
+      const resultsCount = resultsRes.data?.length || 0;
+
+      // Se votesRes vier 0 por causa de RLS, confere a soma de total_votes em results
+      if (votesCount === 0 && resultsRes.data && resultsRes.data.length > 0) {
+        votesCount = resultsRes.data.reduce((acc: number, r: any) => acc + Number(r.total_votes || 0), 0);
+      }
+
+      const hasHistory = roundsCount > 0 || votesCount > 0;
+
+      let summary = '';
+      if (hasHistory) {
+        summary = `O evento possui histórico com ${votesCount} voto(s), ${roundsCount} rodada(s) e ${resultsCount} resultado(s) associados. Para preservar a integridade da auditoria, eventos com histórico de votação não podem ser excluídos definitivamente.`;
+      } else if (projectsCount > 0) {
+        summary = `O evento possui ${projectsCount} projeto(s) cadastrado(s), sem rodadas ou votos associados. A exclusão definitiva removerá as configurações e projetos associados.`;
+      } else {
+        summary = 'Nenhum projeto, rodada ou voto vinculado. Exclusão segura permitida.';
+      }
+
+      return {
+        hasHistory,
+        canDelete: !hasHistory,
+        projectsCount,
+        roundsCount,
+        votesCount,
+        resultsCount,
+        summary,
+      };
+    } catch (err: any) {
+      console.warn('Erro ao verificar histórico do evento:', err);
+      return {
+        hasHistory: false,
+        canDelete: false,
+        projectsCount: 0,
+        roundsCount: 0,
+        votesCount: 0,
+        resultsCount: 0,
+        summary: `Falha ao verificar histórico: ${err.message}`,
+      };
+    }
+  },
+
+  /**
+   * Exclusão segura de evento:
+   * Bloqueia exclusão física se houver histórico de votos ou rodadas.
+   * Permite exclusão caso o evento seja seguro (sem histórico de votação).
+   */
+  async deleteEvent(eventId: string, force = false): Promise<{ success: boolean; id: string }> {
+    if (!eventId) {
+      throw new Error('Identificador do evento é obrigatório para exclusão.');
+    }
+
+    if (!isSupabaseConfigured) {
+      throw new Error('Supabase não está configurado.');
+    }
+
+    if (!force) {
+      const history = await this.checkEventHistory(eventId);
+      if (history.hasHistory) {
+        throw new Error(
+          `Não é possível excluir este evento pois ele possui histórico registrado (${history.summary}). Utilize o arquivamento para manter a rastreabilidade da votação.`
+        );
+      }
+    }
+
+    // 1. Limpa tabelas filhas opcionais com segurança antes de remover o evento
+    try {
+      await supabase.from('event_questions').delete().eq('event_id', eventId);
+    } catch (e) {
+      console.warn('Aviso ao remover event_questions na exclusão:', e);
+    }
+
+    try {
+      await supabase.from('event_admins').delete().eq('event_id', eventId);
+    } catch (e) {
+      console.warn('Aviso ao remover event_admins na exclusão:', e);
+    }
+
+    try {
+      await supabase.from('event_settings').delete().eq('event_id', eventId);
+    } catch (e) {
+      console.warn('Aviso ao remover event_settings na exclusão:', e);
+    }
+
+    try {
+      await supabase.from('projects').delete().eq('event_id', eventId);
+    } catch (e) {
+      console.warn('Aviso ao remover projects na exclusão:', e);
+    }
+
+    // 2. Remove o registro principal de public.events
+    const { error } = await supabase.from('events').delete().eq('id', eventId);
+    if (error) {
+      console.error('Erro ao excluir evento no Supabase:', error);
+      throw new Error(`Falha ao excluir evento do banco: ${error.message}`);
+    }
+
+    return { success: true, id: eventId };
+  },
+
+  /**
+   * Arquiva um evento (muda status para finalizado de forma segura)
+   */
+  async archiveEvent(eventId: string): Promise<EventDocument> {
+    if (!eventId) throw new Error('ID do evento é obrigatório.');
+    return this.updateEvent(eventId, {
+      status: 'finished',
+    });
   },
 
   /**

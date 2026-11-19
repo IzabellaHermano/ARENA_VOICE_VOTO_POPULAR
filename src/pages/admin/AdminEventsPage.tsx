@@ -2,7 +2,8 @@ import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAdminAuth } from '@/hooks/useAdminAuth';
 import { useAdminEvent } from '@/contexts/AdminEventContext';
-import { EventService, EventSummary } from '@/services/eventService';
+import { EventService, EventSummary, EventHistoryCheck } from '@/services/eventService';
+import { EventBannerUpload } from '@/components/admin/EventBannerUpload';
 import { ArenaLogo } from '@/components/branding';
 import {
   Calendar,
@@ -19,6 +20,10 @@ import {
   Lock,
   Archive,
   Save,
+  Trash2,
+  AlertTriangle,
+  ShieldAlert,
+  Loader2,
 } from 'lucide-react';
 
 export const AdminEventsPage: React.FC = () => {
@@ -35,6 +40,13 @@ export const AdminEventsPage: React.FC = () => {
   const [isModalOpen, setIsModalOpen] = useState<boolean>(false);
   const [editingEvent, setEditingEvent] = useState<EventSummary | null>(null);
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
+
+  // Estados do modal de exclusão e histórico
+  const [isDeleteModalOpen, setIsDeleteModalOpen] = useState<boolean>(false);
+  const [eventToDelete, setEventToDelete] = useState<EventSummary | null>(null);
+  const [isCheckingHistory, setIsCheckingHistory] = useState<boolean>(false);
+  const [deleteHistoryCheck, setDeleteHistoryCheck] = useState<EventHistoryCheck | null>(null);
+  const [isDeleting, setIsDeleting] = useState<boolean>(false);
 
   // Campos do formulário
   const [formName, setFormName] = useState<string>('');
@@ -98,6 +110,72 @@ export const AdminEventsPage: React.FC = () => {
   const closeModal = () => {
     setIsModalOpen(false);
     setEditingEvent(null);
+  };
+
+  const openDeleteModal = async (ev: EventSummary) => {
+    if (!isSuperadmin) {
+      setErrorMessage('Operação restrita: Apenas o Superadministrador pode excluir eventos.');
+      return;
+    }
+    setEventToDelete(ev);
+    setIsDeleteModalOpen(true);
+    setIsCheckingHistory(true);
+    setDeleteHistoryCheck(null);
+    try {
+      const history = await EventService.checkEventHistory(ev.id || '');
+      setDeleteHistoryCheck(history);
+    } catch (err: any) {
+      console.error('Erro ao verificar histórico do evento:', err);
+    } finally {
+      setIsCheckingHistory(false);
+    }
+  };
+
+  const closeDeleteModal = () => {
+    if (isDeleting) return;
+    setIsDeleteModalOpen(false);
+    setEventToDelete(null);
+    setDeleteHistoryCheck(null);
+  };
+
+  const handleConfirmDelete = async () => {
+    if (!isSuperadmin || !eventToDelete?.id) return;
+
+    setIsDeleting(true);
+    setErrorMessage(null);
+    try {
+      await EventService.deleteEvent(eventToDelete.id);
+      setEvents((prev) => prev.filter((e) => e.id !== eventToDelete.id));
+      setSuccessMessage(`Evento "${eventToDelete.name}" excluído com sucesso!`);
+      closeDeleteModal();
+      setTimeout(() => setSuccessMessage(null), 4000);
+    } catch (err: any) {
+      console.error('Erro ao excluir evento:', err);
+      setErrorMessage(err.message || 'Falha ao excluir evento.');
+    } finally {
+      setIsDeleting(false);
+    }
+  };
+
+  const handleArchiveInstead = async () => {
+    if (!isSuperadmin || !eventToDelete?.id) return;
+
+    setIsDeleting(true);
+    setErrorMessage(null);
+    try {
+      const updated = await EventService.archiveEvent(eventToDelete.id);
+      setEvents((prev) =>
+        prev.map((e) => (e.id === updated.id ? { ...e, ...updated, status: 'finished' } : e))
+      );
+      setSuccessMessage(`Evento "${eventToDelete.name}" arquivado/finalizado com sucesso!`);
+      closeDeleteModal();
+      setTimeout(() => setSuccessMessage(null), 4000);
+    } catch (err: any) {
+      console.error('Erro ao arquivar evento:', err);
+      setErrorMessage(err.message || 'Falha ao arquivar evento.');
+    } finally {
+      setIsDeleting(false);
+    }
   };
 
   const handleSaveEvent = async (e: React.FormEvent) => {
@@ -327,14 +405,24 @@ export const AdminEventsPage: React.FC = () => {
 
                   <div className="flex items-center gap-1.5">
                     {isSuperadmin && (
-                      <button
-                        type="button"
-                        onClick={() => openEditModal(ev)}
-                        className="p-1.5 rounded-lg bg-white/5 hover:bg-white/10 text-gray-400 hover:text-white transition-colors"
-                        title="Editar Informações do Evento"
-                      >
-                        <Edit3 className="w-4 h-4" />
-                      </button>
+                      <>
+                        <button
+                          type="button"
+                          onClick={() => openEditModal(ev)}
+                          className="p-1.5 rounded-lg bg-white/5 hover:bg-white/10 text-gray-400 hover:text-white transition-colors"
+                          title="Editar Informações do Evento"
+                        >
+                          <Edit3 className="w-4 h-4" />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => openDeleteModal(ev)}
+                          className="p-1.5 rounded-lg bg-white/5 hover:bg-arena-red/20 text-gray-400 hover:text-arena-red transition-colors"
+                          title="Excluir Evento"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </>
                     )}
                   </div>
                 </div>
@@ -500,18 +588,12 @@ export const AdminEventsPage: React.FC = () => {
                 </div>
               </div>
 
-              <div>
-                <label className="block text-xs font-bold uppercase tracking-wider text-gray-300 mb-1">
-                  URL da Imagem de Capa / Banner (Opcional)
-                </label>
-                <input
-                  type="url"
-                  value={formBannerUrl}
-                  onChange={(e) => setFormBannerUrl(e.target.value)}
-                  placeholder="https://... ou vazio para logo padrão"
-                  className="w-full bg-arena-black border border-arena-border rounded-xl px-3.5 py-2.5 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-arena-blue transition-colors"
-                />
-              </div>
+              {/* Upload de Imagem no Banner do Evento */}
+              <EventBannerUpload
+                currentBannerUrl={formBannerUrl}
+                onBannerUploaded={(url) => setFormBannerUrl(url)}
+                onBannerRemoved={() => setFormBannerUrl('')}
+              />
 
               <div className="pt-4 border-t border-arena-border/60 flex items-center justify-end gap-3">
                 <button
@@ -532,6 +614,153 @@ export const AdminEventsPage: React.FC = () => {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* Modal de Exclusão e Salvaguarda de Histórico */}
+      {isDeleteModalOpen && eventToDelete && (
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="w-full max-w-lg bg-arena-card border border-arena-border rounded-3xl p-6 shadow-2xl relative max-h-[90vh] overflow-y-auto animate-fade-in space-y-5">
+            {/* Header do Modal */}
+            <div className="flex items-center justify-between border-b border-arena-border/60 pb-3">
+              <div className="flex items-center gap-2">
+                <Trash2 className="w-5 h-5 text-arena-red" />
+                <h3 className="text-lg font-black text-white">
+                  Exclusão de Evento
+                </h3>
+              </div>
+              <button
+                type="button"
+                onClick={closeDeleteModal}
+                disabled={isDeleting}
+                className="p-1 rounded-lg text-gray-400 hover:text-white hover:bg-white/10 transition-colors"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Identificação do Evento */}
+            <div className="p-4 rounded-2xl bg-arena-black border border-arena-border/80 space-y-2">
+              <div className="flex items-center justify-between">
+                <span className="text-[10px] font-black uppercase tracking-wider text-arena-gold font-mono">
+                  ID: {eventToDelete.id}
+                </span>
+                {getStatusBadge(eventToDelete.status)}
+              </div>
+              <h4 className="text-base font-black text-white">
+                {eventToDelete.name}
+              </h4>
+              {eventToDelete.subtitle && (
+                <p className="text-xs text-arena-blueLight font-medium">
+                  {eventToDelete.subtitle}
+                </p>
+              )}
+              <div className="pt-2 border-t border-arena-border/40 flex items-center gap-4 text-xs text-gray-400 font-mono">
+                <span>{eventToDelete.projectsCount} {eventToDelete.projectsCount === 1 ? 'projeto' : 'projetos'}</span>
+                {eventToDelete.eventDate && <span>Data: {eventToDelete.eventDate}</span>}
+              </div>
+            </div>
+
+            {/* Diagnóstico em Tempo Real do Histórico */}
+            {isCheckingHistory ? (
+              <div className="py-6 text-center space-y-2">
+                <Loader2 className="w-6 h-6 animate-spin text-arena-red mx-auto" />
+                <p className="text-xs text-gray-400 font-mono">
+                  Verificando integridade e histórico de votos no Supabase...
+                </p>
+              </div>
+            ) : deleteHistoryCheck?.hasHistory ? (
+              /* Caso haja histórico de votação: BLOQUEIO DA EXCLUSÃO FÍSICA */
+              <div className="space-y-4">
+                <div className="p-4 rounded-2xl bg-arena-gold/10 border border-arena-gold/40 text-arena-gold space-y-2">
+                  <div className="flex items-center gap-2 font-black text-sm">
+                    <ShieldAlert className="w-5 h-5 shrink-0" />
+                    <span>Exclusão Definitiva Bloqueada</span>
+                  </div>
+                  <p className="text-xs text-gray-300 leading-relaxed">
+                    {deleteHistoryCheck.summary}
+                  </p>
+                </div>
+
+                <div className="grid grid-cols-3 gap-2 text-center text-xs font-mono">
+                  <div className="p-3 bg-arena-black rounded-xl border border-arena-border">
+                    <div className="text-lg font-black text-white">{deleteHistoryCheck.votesCount}</div>
+                    <div className="text-[10px] text-gray-400 uppercase">Votos</div>
+                  </div>
+                  <div className="p-3 bg-arena-black rounded-xl border border-arena-border">
+                    <div className="text-lg font-black text-white">{deleteHistoryCheck.roundsCount}</div>
+                    <div className="text-[10px] text-gray-400 uppercase">Rodadas</div>
+                  </div>
+                  <div className="p-3 bg-arena-black rounded-xl border border-arena-border">
+                    <div className="text-lg font-black text-white">{deleteHistoryCheck.resultsCount}</div>
+                    <div className="text-[10px] text-gray-400 uppercase">Resultados</div>
+                  </div>
+                </div>
+
+                <p className="text-xs text-gray-400 leading-relaxed">
+                  Para retirar o evento de circulação sem apagar histórico de votação nem violar a rastreabilidade da competição, utilize o <strong className="text-white">Arquivamento do Evento</strong>.
+                </p>
+
+                <div className="pt-3 border-t border-arena-border/60 flex items-center justify-end gap-3">
+                  <button
+                    type="button"
+                    onClick={closeDeleteModal}
+                    disabled={isDeleting}
+                    className="px-4 py-2 rounded-xl text-xs font-semibold text-gray-400 hover:text-white hover:bg-white/5 transition-colors"
+                  >
+                    Fechar
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={handleArchiveInstead}
+                    disabled={isDeleting}
+                    className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-arena-gold to-[#D4A017] hover:from-[#FFD700] hover:to-arena-gold text-black text-xs font-black uppercase tracking-wider shadow-gold-glow transition-all flex items-center gap-2"
+                  >
+                    {isDeleting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Archive className="w-4 h-4" />}
+                    <span>{isDeleting ? 'Arquivando...' : 'Arquivar Evento'}</span>
+                  </button>
+                </div>
+              </div>
+            ) : (
+              /* Caso NÃO haja histórico: EXCLUSÃO SEGURA PERMITIDA */
+              <div className="space-y-4">
+                <div className="p-4 rounded-2xl bg-arena-red/10 border border-arena-red/40 text-arena-red space-y-2">
+                  <div className="flex items-center gap-2 font-black text-sm">
+                    <AlertTriangle className="w-5 h-5 shrink-0" />
+                    <span>Confirmação de Exclusão Definitiva</span>
+                  </div>
+                  <p className="text-xs text-gray-300 leading-relaxed">
+                    Tem certeza de que deseja excluir permanentemente o evento <strong className="text-white">"{eventToDelete.name}"</strong>?
+                  </p>
+                  <p className="text-[11px] text-gray-400">
+                    {deleteHistoryCheck?.summary || 'Esta operação apagará o evento e suas configurações associadas. A ação é irreversível.'}
+                  </p>
+                </div>
+
+                <div className="pt-3 border-t border-arena-border/60 flex items-center justify-end gap-3">
+                  <button
+                    type="button"
+                    onClick={closeDeleteModal}
+                    disabled={isDeleting}
+                    className="px-4 py-2 rounded-xl text-xs font-semibold text-gray-400 hover:text-white hover:bg-white/5 transition-colors"
+                  >
+                    Cancelar
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={handleConfirmDelete}
+                    disabled={isDeleting}
+                    className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-arena-red to-[#B3050F] hover:from-[#FF1E27] hover:to-arena-red text-white text-xs font-black uppercase tracking-wider shadow-neon-glow transition-all flex items-center gap-2"
+                  >
+                    {isDeleting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Trash2 className="w-4 h-4" />}
+                    <span>{isDeleting ? 'Excluindo...' : 'Sim, Excluir Evento'}</span>
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
         </div>
       )}
