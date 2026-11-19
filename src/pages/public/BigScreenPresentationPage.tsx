@@ -80,7 +80,7 @@ export const BigScreenPresentationPage: React.FC = () => {
     return paramEventId || queryEventId || activeDbEventId || DEFAULT_EVENT_ID;
   }, [paramEventId, queryEventId, activeDbEventId]);
 
-  const votingUrl = getPublicVotingUrl();
+  const votingUrl = getPublicVotingUrl(targetEventId);
 
   const [activeEvent, setActiveEvent] = useState<EventDocument | null>(null);
   const [activeRound, setActiveRound] = useState<RoundDocument | null>(null);
@@ -150,9 +150,7 @@ export const BigScreenPresentationPage: React.FC = () => {
   useEffect(() => {
     if (!targetEventId) return;
     const unsub = EventService.subscribeToAllEventResults(targetEventId, (resList) => {
-      if (resList && resList.length > 0) {
-        setResultsList(resList);
-      }
+      setResultsList(resList || []);
     });
     return () => unsub();
   }, [targetEventId]);
@@ -469,7 +467,7 @@ export const BigScreenPresentationPage: React.FC = () => {
 
       {/* 1. MODO QR CODE ESTILIZADO */}
       {activeView === 'qrcode' && (
-        <BigScreenQRCodeView size={280} />
+        <BigScreenQRCodeView size={280} eventId={targetEventId} />
       )}
 
       {/* 2. TELA DE BOAS-VINDAS */}

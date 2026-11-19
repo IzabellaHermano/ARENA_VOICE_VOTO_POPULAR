@@ -1,9 +1,23 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
+import { useParams, useLocation } from 'react-router-dom';
 import { ArenaLogo, ArenaMascot } from '@/components/branding';
 import { BigScreenQRCodeView } from '@/components/telao';
 import { Maximize2, Minimize2, RadioTower, ShieldCheck } from 'lucide-react';
 
 export const BigScreenQRCodePage: React.FC = () => {
+  const { eventId: paramEventId } = useParams<{ eventId?: string }>();
+  const location = useLocation();
+
+  const queryEventId = useMemo(() => {
+    try {
+      const sp = new URLSearchParams(location.search);
+      return sp.get('event') || sp.get('evento') || null;
+    } catch {
+      return null;
+    }
+  }, [location.search]);
+
+  const targetEventId = paramEventId || queryEventId || undefined;
   const [isFullscreen, setIsFullscreen] = useState(false);
 
   const toggleFullscreen = () => {
@@ -45,7 +59,7 @@ export const BigScreenQRCodePage: React.FC = () => {
 
       {/* Conteúdo Central: Nova Visualização Escura e Elegante do QR Code */}
       <main className="flex-1 flex flex-col items-center justify-center py-6 z-10 w-full">
-        <BigScreenQRCodeView size={260} />
+        <BigScreenQRCodeView size={260} eventId={targetEventId} />
       </main>
 
       {/* Footer Minimalista */}

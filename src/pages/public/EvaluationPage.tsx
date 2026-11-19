@@ -13,39 +13,7 @@ export const EvaluationPage: React.FC = () => {
   // Perguntas ativas ordenadas por posição
   const activeQuestions = useMemo(() => {
     if (!currentQuestions || currentQuestions.length === 0) {
-      // Fallback padrão se ainda não tiver carregado
-      return [
-        {
-          id: 'q_default_inno',
-          title: 'Nível de Inovação',
-          description: 'Avalia a originalidade e a inovação da solução.',
-          position: 1,
-          active: true,
-          required: true,
-          minScore: 1,
-          maxScore: 5,
-        },
-        {
-          id: 'q_default_impact',
-          title: 'Impacto do Projeto na CPTM',
-          description: 'Avalia a contribuição do projeto para a companhia.',
-          position: 2,
-          active: true,
-          required: true,
-          minScore: 1,
-          maxScore: 5,
-        },
-        {
-          id: 'q_default_dev',
-          title: 'Salto de Desenvolvimento do Projeto',
-          description: 'Avalia a evolução apresentada pelo projeto.',
-          position: 3,
-          active: true,
-          required: true,
-          minScore: 1,
-          maxScore: 5,
-        },
-      ];
+      return [];
     }
     return [...currentQuestions].filter((q) => q.active).sort((a, b) => a.position - b.position);
   }, [currentQuestions]);
@@ -132,17 +100,24 @@ export const EvaluationPage: React.FC = () => {
 
         {/* Lista Dinâmica de Critérios de Avaliação do Evento */}
         <div className="space-y-3">
-          {activeQuestions.map((q, index) => (
-            <RatingSelector
-              key={q.id}
-              id={q.id}
-              title={q.title}
-              description={q.description || 'Selecione uma nota de 1 a 5 para este critério.'}
-              icon={getCriterionIcon(index)}
-              value={answers[q.id] ?? null}
-              onChange={(val) => handleScoreChange(q.id, val)}
-            />
-          ))}
+          {activeQuestions.length === 0 ? (
+            <div className="p-6 text-center text-gray-400 bg-arena-card/60 rounded-xl border border-white/5 space-y-2">
+              <div className="w-6 h-6 border-2 border-arena-red border-t-transparent rounded-full animate-spin mx-auto" />
+              <p className="text-xs">Carregando critérios de avaliação...</p>
+            </div>
+          ) : (
+            activeQuestions.map((q, index) => (
+              <RatingSelector
+                key={q.id}
+                id={q.id}
+                title={q.title}
+                description={q.description || 'Selecione uma nota de 1 a 5 para este critério.'}
+                icon={getCriterionIcon(index)}
+                value={answers[q.id] ?? null}
+                onChange={(val) => handleScoreChange(q.id, val)}
+              />
+            ))
+          )}
         </div>
 
         {/* 3. Botão AVALIAR */}

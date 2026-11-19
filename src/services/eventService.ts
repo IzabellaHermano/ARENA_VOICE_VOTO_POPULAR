@@ -8,6 +8,7 @@ import {
 } from '@/types';
 import { calculateApprovalStats, ApprovalStats } from '@/utils/approvalCalculator';
 import { AdminMockService } from './adminMockService';
+import { QuestionService } from './questionService';
 
 export type { ApprovalStats };
 
@@ -399,13 +400,21 @@ export const EventService = {
         if (fallbackError) {
           throw new Error(`Falha ao criar evento no Supabase: ${fallbackError.message}`);
         }
-        return mapEventRow(fallbackData);
+        const createdFallback = mapEventRow(fallbackData);
+        QuestionService.ensureDefaultQuestions(id).catch((err: any) => {
+          console.warn('[createEvent] Aviso ao semear perguntas padrão:', err);
+        });
+        return createdFallback;
       }
 
       throw new Error(`Falha ao cadastrar evento: ${error.message}`);
     }
 
-    return mapEventRow(data);
+    const created = mapEventRow(data);
+    QuestionService.ensureDefaultQuestions(id).catch((err: any) => {
+      console.warn('[createEvent] Aviso ao semear perguntas padrão:', err);
+    });
+    return created;
   },
 
   /**
@@ -714,12 +723,12 @@ export const EventService = {
 
     fetchRound();
 
-    // 2. Canal Realtime ouvindo a tabela rounds para o evento com tratamento de ciclo de vida
-    const channelId = `round_sub_${roundId || targetEventId || 'any'}_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
-    const filter = roundId
-      ? `id=eq.${roundId}`
-      : targetEventId
+    // 2. Canal Realtime ouvindo a tabela rounds para o evento com isolamento estrito
+    const channelId = `round_sub_${targetEventId || roundId || 'any'}_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+    const filter = targetEventId
       ? `event_id=eq.${targetEventId}`
+      : roundId
+      ? `id=eq.${roundId}`
       : undefined;
 
     const channelConfig: any = { event: '*', schema: 'public', table: 'rounds' };
@@ -740,15 +749,11 @@ export const EventService = {
           }
           if (payload.new && (payload.new as any).id) {
             const newRow = payload.new as any;
-            if (roundId) {
-              if (newRow.id === roundId) {
-                onUpdate(mapRoundRow(newRow));
-              }
-            } else if (targetEventId) {
-              if (newRow.event_id === targetEventId) {
-                onUpdate(mapRoundRow(newRow));
-              }
-            } else {
+            if (targetEventId && newRow.event_id === targetEventId) {
+              onUpdate(mapRoundRow(newRow));
+            } else if (roundId && newRow.id === roundId) {
+              onUpdate(mapRoundRow(newRow));
+            } else if (!targetEventId && !roundId) {
               onUpdate(mapRoundRow(newRow));
             }
           } else {
@@ -1266,6 +1271,11 @@ export const EventService = {
    */
   async openRound(eventId: string, projectId: string, durationSeconds?: number) {
     if (isSupabaseConfigured) {
+      // Garante que o evento possua critérios cadastrados com IDs reais antes de abrir a rodada
+      await QuestionService.ensureDefaultQuestions(eventId).catch((err: any) => {
+        console.warn('[openRound] Aviso ao verificar critérios do evento:', err);
+      });
+
       const payload: Record<string, any> = {
         p_event_id: eventId,
         p_project_id: projectId,

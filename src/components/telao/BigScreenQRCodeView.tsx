@@ -8,13 +8,15 @@ import { Sparkles, Copy, Check, Smartphone, ShieldCheck } from 'lucide-react';
 export interface BigScreenQRCodeViewProps {
   className?: string;
   size?: number;
+  eventId?: string;
 }
 
 export const BigScreenQRCodeView: React.FC<BigScreenQRCodeViewProps> = ({
   className = '',
   size = 280,
+  eventId,
 }) => {
-  const votingUrl = getPublicVotingUrl();
+  const votingUrl = getPublicVotingUrl(eventId);
   const [copied, setCopied] = useState(false);
 
   const handleCopy = () => {

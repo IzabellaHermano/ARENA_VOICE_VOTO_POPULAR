@@ -107,16 +107,16 @@ export const AdminResultsPage: React.FC = () => {
     // Carga inicial imediata via RPC administrativa para resposta instantânea
     EventService.getAdminResults(activeEventId)
       .then((res) => {
-        if (res?.results && res.results.length > 0) {
+        if (res?.results) {
           setResultsList(res.results.map(mapResultRow));
+        } else {
+          setResultsList([]);
         }
       })
       .catch((err) => console.warn('Aviso getAdminResults inicial:', err));
 
     const unsub = EventService.subscribeToAllEventResults(activeEventId, (resList) => {
-      if (resList && resList.length > 0) {
-        setResultsList(resList);
-      }
+      setResultsList(resList || []);
     });
     return () => unsub();
   }, [activeEventId]);

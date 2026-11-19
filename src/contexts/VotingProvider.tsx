@@ -210,7 +210,7 @@ export const VotingProvider: React.FC<VotingProviderProps> = ({ children }) => {
     const targetEventId = activeEventId || event?.id || DEFAULT_EVENT_ID;
 
     // Se a rodada possui snapshot congelado de perguntas, utiliza-o
-    const snapshot = (currentRound as any)?.questions_snapshot;
+    const snapshot = (currentRound as any)?.questionsSnapshot || (currentRound as any)?.questions_snapshot;
     if (snapshot && Array.isArray(snapshot) && snapshot.length > 0) {
       setCurrentQuestions(
         snapshot.map((q: any) => ({
@@ -221,8 +221,8 @@ export const VotingProvider: React.FC<VotingProviderProps> = ({ children }) => {
           position: q.position || 1,
           active: true,
           required: q.required ?? true,
-          minScore: q.min_score ?? 1,
-          maxScore: q.max_score ?? 5,
+          minScore: q.minScore ?? q.min_score ?? 1,
+          maxScore: q.maxScore ?? q.max_score ?? 5,
         }))
       );
       return;

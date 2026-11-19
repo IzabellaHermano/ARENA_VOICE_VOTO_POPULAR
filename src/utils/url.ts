@@ -34,7 +34,10 @@ export function getPublicAppOrigin(): string {
   return OFFICIAL_PRODUCTION_URL;
 }
 
-export function getPublicVotingUrl(): string {
+export function getPublicVotingUrl(eventId?: string): string {
   const origin = getPublicAppOrigin();
+  if (eventId && eventId.trim()) {
+    return `${origin}/votar/${encodeURIComponent(eventId.trim())}`;
+  }
   return `${origin}/votar`;
 }

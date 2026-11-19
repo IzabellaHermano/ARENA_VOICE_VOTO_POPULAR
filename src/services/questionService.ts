@@ -109,6 +109,14 @@ export const QuestionService = {
             updatedAt: q.updated_at,
           }));
         }
+
+        // Se o evento não possui perguntas cadastradas, tenta semear automaticamente os critérios padrão
+        if (!error && (!data || data.length === 0) && !includeInactive) {
+          const seeded = await this.ensureDefaultQuestions(eventId);
+          if (seeded && seeded.length > 0) {
+            return seeded;
+          }
+        }
       } catch (err) {
         console.warn('[QuestionService] Erro ao listar perguntas no Supabase:', err);
       }
@@ -116,6 +124,82 @@ export const QuestionService = {
 
     // Fallback local isolado por evento
     return this.getLocalQuestions(eventId, includeInactive);
+  },
+
+  /**
+   * Garante que o evento possua critérios cadastrados no banco de dados.
+   * Se nenhum critério existir, cria automaticamente os 3 critérios oficiais para o evento.
+   */
+  async ensureDefaultQuestions(eventId: string): Promise<EventQuestion[]> {
+    if (!eventId) return [];
+
+    if (isSupabaseConfigured) {
+      try {
+        const { data: existing } = await supabase
+          .from('event_questions')
+          .select('*')
+          .eq('event_id', eventId)
+          .order('position', { ascending: true });
+
+        if (existing && existing.length > 0) {
+          return existing.map((q: any) => ({
+            id: q.id,
+            eventId: q.event_id,
+            title: q.title,
+            description: q.description || '',
+            position: q.position,
+            active: q.active,
+            required: q.required ?? true,
+            minScore: q.min_score ?? 1,
+            maxScore: q.max_score ?? 5,
+            createdAt: q.created_at,
+            updatedAt: q.updated_at,
+          }));
+        }
+
+        // Tenta criar os 3 critérios padrão
+        const defaults = [
+          {
+            title: 'Nível de Inovação',
+            description: 'Avalia a originalidade e a inovação da solução.',
+            position: 1,
+          },
+          {
+            title: 'Impacto do Projeto na CPTM',
+            description: 'Avalia a contribuição do projeto para a companhia.',
+            position: 2,
+          },
+          {
+            title: 'Salto de Desenvolvimento do Projeto',
+            description: 'Avalia a evolução apresentada pelo projeto.',
+            position: 3,
+          },
+        ];
+
+        const createdQuestions: EventQuestion[] = [];
+        for (const def of defaults) {
+          try {
+            const q = await this.createQuestion(eventId, {
+              title: def.title,
+              description: def.description,
+              position: def.position,
+              active: true,
+            });
+            createdQuestions.push(q);
+          } catch (e) {
+            console.warn(`[ensureDefaultQuestions] Falha ao criar critério "${def.title}":`, e);
+          }
+        }
+
+        if (createdQuestions.length > 0) {
+          return createdQuestions;
+        }
+      } catch (err) {
+        console.warn('[QuestionService] Erro ao garantir perguntas padrão:', err);
+      }
+    }
+
+    return this.getLocalQuestions(eventId, false);
   },
 
   /**

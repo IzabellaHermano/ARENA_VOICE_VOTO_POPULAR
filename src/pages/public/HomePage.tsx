@@ -1,16 +1,37 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { motion } from 'framer-motion';
+import { motion, AnimatePresence } from 'framer-motion';
 import { ArenaLogo } from '@/components/branding';
 import { VotingButton } from '@/components/voting';
 import { useVoting } from '@/hooks/useVoting';
-import { Users, Star, TrendingUp, Play, Loader2 } from 'lucide-react';
+import { EventService } from '@/services/eventService';
+import { EventDocument } from '@/types';
+import { Users, Star, TrendingUp, Play, Loader2, Sparkles, X, ChevronRight } from 'lucide-react';
 
 export const HomePage: React.FC = () => {
   const navigate = useNavigate();
   const { currentRound, hasVotedCurrentProject, isLoading } = useVoting();
+  const [activeEvents, setActiveEvents] = useState<EventDocument[]>([]);
+  const [showEventSelector, setShowEventSelector] = useState(false);
+
+  useEffect(() => {
+    EventService.listEvents()
+      .then((all) => {
+        const active = all.filter((e) => e.status === 'active');
+        setActiveEvents(active);
+      })
+      .catch(console.warn);
+  }, []);
 
   const handleStartVoting = () => {
+    if (activeEvents.length > 1) {
+      setShowEventSelector(true);
+      return;
+    }
+    if (activeEvents.length === 1) {
+      navigate(`/votar/${activeEvents[0].id}`);
+      return;
+    }
     if (currentRound?.status === 'open') {
       if (hasVotedCurrentProject) {
         navigate('/confirmacao');
@@ -117,6 +138,64 @@ export const HomePage: React.FC = () => {
           Acesso instantâneo • Voto anônimo pelo celular
         </p>
       </div>
+
+      {/* Modal / Seletor de Eventos Ao Vivo */}
+      <AnimatePresence>
+        {showEventSelector && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95, y: 10 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 10 }}
+              className="w-full max-w-md bg-arena-card border border-arena-border rounded-2xl p-6 shadow-2xl space-y-5 text-left"
+            >
+              <div className="flex items-center justify-between border-b border-white/10 pb-3">
+                <div className="flex items-center gap-2">
+                  <Sparkles className="w-5 h-5 text-arena-gold" />
+                  <h3 className="text-base font-bold text-white uppercase tracking-wider">
+                    Selecione o Evento
+                  </h3>
+                </div>
+                <button
+                  onClick={() => setShowEventSelector(false)}
+                  className="p-1 text-gray-400 hover:text-white rounded-lg hover:bg-white/10 transition-colors"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              <p className="text-xs text-gray-300">
+                Há múltiplos eventos acontecendo ao mesmo tempo. Escolha a votação do evento que você está acompanhando:
+              </p>
+
+              <div className="space-y-2.5 max-h-64 overflow-y-auto pr-1">
+                {activeEvents.map((ev) => (
+                  <button
+                    key={ev.id}
+                    onClick={() => {
+                      setShowEventSelector(false);
+                      navigate(`/votar/${ev.id}`);
+                    }}
+                    className="w-full p-4 rounded-xl bg-black/50 hover:bg-arena-red/15 border border-white/10 hover:border-arena-red/40 transition-all flex items-center justify-between group text-left"
+                  >
+                    <div>
+                      <h4 className="text-sm font-bold text-white group-hover:text-arena-red transition-colors">
+                        {ev.name}
+                      </h4>
+                      {ev.description && (
+                        <p className="text-xs text-gray-400 line-clamp-1 mt-0.5">
+                          {ev.description}
+                        </p>
+                      )}
+                    </div>
+                    <ChevronRight className="w-4 h-4 text-gray-500 group-hover:text-arena-red transition-colors shrink-0 ml-2" />
+                  </button>
+                ))}
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
     </div>
   );
 };
