@@ -7,6 +7,9 @@ import { useAdminAuth } from '@/hooks/useAdminAuth';
 export interface AdminEventContextType {
   currentEventId: string | null;
   currentEvent: EventDocument | null;
+  userEventRole: 'superadmin' | 'admin' | 'operator' | null;
+  isEventAdmin: boolean;
+  isEventOperator: boolean;
   isLoadingEvent: boolean;
   authorizationError: string | null;
   clearAuthorizationError: () => void;
@@ -32,8 +35,15 @@ export const AdminEventProvider: React.FC<{ children: React.ReactNode }> = ({ ch
   });
 
   const [currentEvent, setCurrentEvent] = useState<EventDocument | null>(null);
+  const [userEventRole, setUserEventRole] = useState<'superadmin' | 'admin' | 'operator' | null>(() => {
+    if (role === 'superadmin') return 'superadmin';
+    return null;
+  });
   const [isLoadingEvent, setIsLoadingEvent] = useState<boolean>(false);
   const [authorizationError, setAuthorizationError] = useState<string | null>(null);
+
+  const isEventAdmin = role === 'superadmin' || userEventRole === 'superadmin' || userEventRole === 'admin';
+  const isEventOperator = !isEventAdmin && userEventRole === 'operator';
 
   const clearAuthorizationError = useCallback(() => {
     setAuthorizationError(null);
@@ -43,6 +53,7 @@ export const AdminEventProvider: React.FC<{ children: React.ReactNode }> = ({ ch
   useEffect(() => {
     if (!currentEventId) {
       setCurrentEvent(null);
+      setUserEventRole(null);
       setIsLoadingEvent(false);
       return;
     }
@@ -69,6 +80,7 @@ export const AdminEventProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         console.warn(`[AdminEventContext] Acesso revogado ao evento ${currentEventId} para ${adminUser.email}`);
         setCurrentEventId(null);
         setCurrentEvent(null);
+        setUserEventRole(null);
         if (typeof window !== 'undefined') {
           localStorage.removeItem(STORAGE_KEY);
         }
@@ -78,7 +90,17 @@ export const AdminEventProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         return;
       }
 
-      // 2. Escuta o evento em tempo real
+      // 2. Determina o papel específico do usuário neste evento
+      const effRole = await EventService.getUserEventRole(
+        currentEventId,
+        adminUser.uid,
+        role || undefined
+      );
+      if (!isCancelled) {
+        setUserEventRole(effRole || (role === 'superadmin' ? 'superadmin' : 'operator'));
+      }
+
+      // 3. Escuta o evento em tempo real
       const unsub = EventService.subscribeToCurrentEvent(
         currentEventId,
         (eventDoc) => {
@@ -128,6 +150,13 @@ export const AdminEventProvider: React.FC<{ children: React.ReactNode }> = ({ ch
           setAuthorizationError('Acesso negado: Você não possui permissão para acessar este evento.');
           return false;
         }
+
+        const effRole = await EventService.getUserEventRole(
+          eventId,
+          adminUser.uid,
+          role || undefined
+        );
+        setUserEventRole(effRole || (role === 'superadmin' ? 'superadmin' : 'operator'));
       }
 
       setCurrentEventId(eventId);
@@ -143,6 +172,7 @@ export const AdminEventProvider: React.FC<{ children: React.ReactNode }> = ({ ch
   const clearSelectedEvent = useCallback(() => {
     setCurrentEventId(null);
     setCurrentEvent(null);
+    setUserEventRole(null);
     setAuthorizationError(null);
     if (typeof window !== 'undefined') {
       localStorage.removeItem(STORAGE_KEY);
@@ -166,6 +196,9 @@ export const AdminEventProvider: React.FC<{ children: React.ReactNode }> = ({ ch
       value={{
         currentEventId,
         currentEvent,
+        userEventRole,
+        isEventAdmin,
+        isEventOperator,
         isLoadingEvent,
         authorizationError,
         clearAuthorizationError,

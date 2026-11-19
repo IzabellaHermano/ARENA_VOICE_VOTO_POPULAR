@@ -3,8 +3,8 @@ import { createClient } from '@supabase/supabase-js';
 // Variáveis de ambiente públicas do Supabase (Vite)
 const rawUrl = (import.meta.env.VITE_SUPABASE_URL || 'https://demo-placeholder.supabase.co').trim();
 // Remove automaticamente /rest/v1, /rest/v1/ ou barras finais para garantir funcionamento de Auth e Realtime
-const supabaseUrl = rawUrl.replace(/\/rest\/v1\/?$/, '').replace(/\/+$/, '');
-const supabaseAnonKey = (import.meta.env.VITE_SUPABASE_ANON_KEY || 'demo-anon-key-placeholder').trim();
+export const supabaseUrl = rawUrl.replace(/\/rest\/v1\/?$/, '').replace(/\/+$/, '');
+export const supabaseAnonKey = (import.meta.env.VITE_SUPABASE_ANON_KEY || 'demo-anon-key-placeholder').trim();
 
 export const isSupabaseConfigured = Boolean(
   import.meta.env.VITE_SUPABASE_URL &&

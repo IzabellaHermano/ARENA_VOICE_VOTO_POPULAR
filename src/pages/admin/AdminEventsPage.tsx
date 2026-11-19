@@ -23,7 +23,7 @@ import {
 
 export const AdminEventsPage: React.FC = () => {
   const navigate = useNavigate();
-  const { adminUser, role, isSuperadmin, isAdmin } = useAdminAuth();
+  const { adminUser, role, isSuperadmin } = useAdminAuth();
   const { selectEvent, authorizationError, clearAuthorizationError } = useAdminEvent();
 
   const [events, setEvents] = useState<EventSummary[]>([]);
@@ -64,6 +64,10 @@ export const AdminEventsPage: React.FC = () => {
   }, [adminUser?.uid, role]);
 
   const openCreateModal = () => {
+    if (!isSuperadmin) {
+      setErrorMessage('Operação restrita: Apenas o Superadministrador pode cadastrar novos eventos.');
+      return;
+    }
     setEditingEvent(null);
     setFormName('');
     setFormSubtitle('');
@@ -76,6 +80,10 @@ export const AdminEventsPage: React.FC = () => {
   };
 
   const openEditModal = (ev: EventSummary) => {
+    if (!isSuperadmin) {
+      setErrorMessage('Operação restrita: Apenas o Superadministrador pode editar informações de eventos.');
+      return;
+    }
     setEditingEvent(ev);
     setFormName(ev.name);
     setFormSubtitle(ev.subtitle || '');
@@ -166,7 +174,16 @@ export const AdminEventsPage: React.FC = () => {
   const handleEnterEvent = async (eventId: string) => {
     const success = await selectEvent(eventId);
     if (success) {
-      navigate('/admin/projetos');
+      const eventRole = await EventService.getUserEventRole(
+        eventId,
+        adminUser?.uid || '',
+        role || undefined
+      );
+      if (eventRole === 'operator') {
+        navigate('/admin/votacao');
+      } else {
+        navigate('/admin/projetos');
+      }
     }
   };
 
@@ -309,7 +326,7 @@ export const AdminEventsPage: React.FC = () => {
                   {getStatusBadge(ev.status)}
 
                   <div className="flex items-center gap-1.5">
-                    {(isSuperadmin || isAdmin) && (
+                    {isSuperadmin && (
                       <button
                         type="button"
                         onClick={() => openEditModal(ev)}

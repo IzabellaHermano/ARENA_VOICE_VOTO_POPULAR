@@ -20,6 +20,8 @@ Este documento registra o status de execução de cada uma das 9 etapas de desen
 - [x] **Migração Arquitetural — Etapa 2: Migração Completa do Firebase para Supabase** (Concluída e Homologada ✅)
 - [x] **Nova Arquitetura — Etapa 3: Nova Entrada do Sistema, Login e Gerenciamento de Administradores** (Concluída e Homologada ✅)
 - [x] **Nova Arquitetura — Etapa 4: Correção do Motor de Votação e Sincronização em Tempo Real** (Concluída e Homologada ✅)
+- [x] **Nova Arquitetura — Etapa 1: Votação, Apuração e Eventos Simultâneos** (Concluída e Homologada ✅)
+- [x] **Nova Arquitetura — Etapa 2: Usuários, Vínculo com Eventos e RBAC Multi-Evento** (Concluída e Homologada ✅)
 
 ---
 
@@ -393,4 +395,74 @@ Este documento registra o status de execução de cada uma das 9 etapas de desen
 
 ---
 
-**Status Atual:** Etapa 4 (Nova Arquitetura — Correção do Motor de Votação e Sincronização em Tempo Real) concluída e homologada com 100% de aprovação técnica. Supabase validado e ativo em produção.
+### Detalhamento da Etapa 2 — Usuários, Vínculo com Eventos e RBAC Multi-Evento ✅
+
+#### 1. Criação e Persistência Real de Usuários
+- **Supabase Auth & `admin_profiles`:**
+  - Fluxo de criação com cliente isolado (`persistSession: false, autoRefreshToken: false, detectSessionInUrl: false`) para não comprometer a sessão do Superadmin.
+  - Eliminação de qualquer fallback com usuários falsos ou dados no `localStorage`.
+  - Tratamento determinístico de e-mails já cadastrados tanto em `admin_profiles` quanto em `auth.users`.
+  - Confirmação de e-mail integrada no backend para permitir login imediato do novo usuário sem bloqueio por confirmação pendente.
+
+#### 2. Matriz de Permissões RBAC (Por Evento)
+- **SUPERADMIN (Global):**
+  - Controle irrestrito e universal da plataforma.
+  - Cria, edita e exclui eventos.
+  - Cadastra novos usuários administrativos e gerencia seus acessos.
+  - Vincula usuários aos eventos e define seus papéis específicos.
+  - Acesso irrestrito a todos os eventos, projetos, critérios, votação e telão.
+- **ADMINISTRADOR (Por Evento):**
+  - Controle administrativo pleno exclusivamente nos eventos aos quais foi vinculado.
+  - Gerencia projetos (criar, editar, ativar/desativar, excluir) desses eventos.
+  - Gerencia critérios e perguntas de avaliação desses eventos.
+  - Altera durações e pesos nas configurações do evento.
+  - Bloqueado de criar ou excluir eventos e de cadastrar novos usuários.
+- **OPERADOR (Por Evento):**
+  - Controle estritamente operacional nos eventos aos quais foi vinculado.
+  - Visualiza projetos em modo somente leitura (sem permissão de criação, edição ou exclusão).
+  - Consulta critérios e perguntas em modo somente leitura.
+  - Visualiza configurações sem permissão de alteração.
+  - **Autorizado a controlar rodadas:** Abrir e fechar votação quando designado, avançar projetos.
+  - Acompanha o telão oficial e visualiza resultados consolidados.
+
+#### 3. Gestão de Vínculos Multi-Evento (`AdminUsersPage`)
+- O Superadmin possui interface com:
+  - Contador de usuários sem eventos vinculados (`unassignedCount`) com badge destacada "Sem Eventos Vinculados".
+  - Chips informativos na tabela listando cada evento e o respectivo papel do usuário (`Admin` ou `Operador`).
+  - Modal dinâmico para concessão de acesso, alteração instantânea de papel e revogação de vínculos.
+  - Alerta de proteção contra desvinculação que deixaria um evento sem administrador (evento órfão).
+  - Suporte a papéis diferentes para o mesmo usuário em múltiplos eventos (ex: Administrador no Evento A e Operador no Evento B).
+
+#### 4. Proteção em Camadas: Frontend e Backend (RLS)
+- **Contexto (`AdminEventContext`):**
+  - Identifica o papel do usuário no evento ativo (`userEventRole`), expondo flags reativas `isEventAdmin` e `isEventOperator`.
+- **Navegação (`AdminSidebar`):**
+  - Oculta ou bloqueia módulos administrativos (`Projetos`, `Perguntas`, `Configurações`) para usuários com papel Operador no evento selecionado.
+  - Oculta módulo `Administradores` para qualquer usuário que não seja Superadmin.
+- **Páginas de Gestão:**
+  - `AdminProjectsPage`, `AdminQuestionsPage` e `AdminSettingsPage` renderizam alertas de modo somente leitura e desativam/ocultam botões de criação, alteração e exclusão para operadores.
+- **Banco de Dados (RLS & RPCs):**
+  - Script SQL [`supabase/etapa2_rbac_patch.sql`](file:///c:/Users/IZABELLAA/Documents/ARENA_VOICE_VOTO_POPULAR/supabase/etapa2_rbac_patch.sql) preparado com políticas RLS para `projects`, `events`, `event_questions` e `event_admins` usando `has_event_access(event_id, required_role)`.
+
+#### 5. Homologação Automatizada ([`scripts/testEtapa2RBACFull.mjs`](file:///c:/Users/IZABELLAA/Documents/ARENA_VOICE_VOTO_POPULAR/scripts/testEtapa2RBACFull.mjs))
+- Suíte oficial com **16 testes aprovados com 100% de sucesso**:
+  1. [x] Autenticação do Superadmin (`admin@cptm.sp.gov.br`).
+  2. [x] Verificação de papel global `superadmin`.
+  3. [x] Criação de perfil Administrador no Supabase.
+  4. [x] Criação de perfil Operador no Supabase.
+  5. [x] Atualização de dados cadastrais via RPC `admin_manage_profile`.
+  6. [x] Alternância de status ativo/inativo via RPC.
+  7. [x] Identificação de múltiplos eventos existentes no banco.
+  8. [x] Vinculação de Administrador ao Evento A.
+  9. [x] Vinculação de Operador ao Evento A.
+  10. [x] Vinculação de Operador ao Evento B (multi-evento com papéis distintos).
+  11. [x] Consulta e validação de vínculos por usuário.
+  12. [x] Acesso universal do Superadmin aos eventos A e B.
+  13. [x] Acesso autorizado do Administrador ao Evento A e bloqueio estrito ao Evento B.
+  14. [x] Acesso do Operador confirmado a ambos os eventos vinculados.
+  15. [x] Revogação de acesso com bloqueio imediato ao Evento A e preservação do Evento B.
+  16. [x] Limpeza e exclusão segura das contas de teste, restaurando o banco ao estado original.
+
+---
+
+**Status Atual:** Etapa 2 (Usuários, Vínculo com Eventos e RBAC Multi-Evento) 100% implementada, testada e homologada com sucesso no Supabase. Build de produção concluído com 0 erros.

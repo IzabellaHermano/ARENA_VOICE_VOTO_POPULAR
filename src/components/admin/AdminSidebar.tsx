@@ -15,6 +15,7 @@ import {
   Trophy,
   ArrowLeftRight,
   HelpCircle,
+  Lock,
 } from 'lucide-react';
 import { useAdminAuth } from '@/hooks/useAdminAuth';
 import { useAdminEvent } from '@/contexts/AdminEventContext';
@@ -27,7 +28,7 @@ export interface AdminSidebarProps {
 export const AdminSidebar: React.FC<AdminSidebarProps> = ({ isOpen, onClose }) => {
   const navigate = useNavigate();
   const { adminUser, role, isSuperadmin, logout } = useAdminAuth();
-  const { currentEventId, currentEvent, clearSelectedEvent } = useAdminEvent();
+  const { currentEventId, currentEvent, clearSelectedEvent, isEventAdmin, userEventRole } = useAdminEvent();
 
   const handleLogout = async () => {
     await logout();
@@ -36,18 +37,37 @@ export const AdminSidebar: React.FC<AdminSidebarProps> = ({ isOpen, onClose }) =
 
   const navItems = [
     { name: 'Meus Eventos', path: '/admin/eventos', icon: Trophy, requiresEvent: false },
-    { name: 'Projetos', path: '/admin/projetos', icon: FolderKanban, requiresEvent: true },
-    { name: 'Perguntas e Critérios', path: '/admin/perguntas', icon: HelpCircle, requiresEvent: true },
+    {
+      name: 'Projetos',
+      path: '/admin/projetos',
+      icon: FolderKanban,
+      requiresEvent: true,
+      requiresAdmin: true,
+    },
+    {
+      name: 'Perguntas e Critérios',
+      path: '/admin/perguntas',
+      icon: HelpCircle,
+      requiresEvent: true,
+      requiresAdmin: true,
+    },
     { name: 'Votação', path: '/admin/votacao', icon: Radio, requiresEvent: true },
     { name: 'Resultados', path: '/admin/resultados', icon: BarChart3, requiresEvent: true },
     {
       name: 'Administradores',
       path: '/admin/usuarios',
       icon: Users,
-      badge: isSuperadmin ? 'Super' : undefined,
+      badge: 'Super',
       requiresEvent: false,
+      requiresSuperadmin: true,
     },
-    { name: 'Configurações', path: '/admin/configuracoes', icon: Settings, requiresEvent: true },
+    {
+      name: 'Configurações',
+      path: '/admin/configuracoes',
+      icon: Settings,
+      requiresEvent: true,
+      requiresAdmin: true,
+    },
   ];
 
   return (
@@ -104,6 +124,17 @@ export const AdminSidebar: React.FC<AdminSidebarProps> = ({ isOpen, onClose }) =
               <div className="text-xs font-black text-white mt-1 truncate" title={currentEvent.name}>
                 {currentEvent.name}
               </div>
+              {userEventRole && !isSuperadmin && (
+                <div className="mt-1 flex items-center gap-1">
+                  <span className={`text-[9px] uppercase font-black px-1.5 py-0.5 rounded ${
+                    userEventRole === 'admin'
+                      ? 'bg-arena-blue/20 text-arena-blue border border-arena-blue/30'
+                      : 'bg-gray-700/50 text-gray-300 border border-gray-600/40'
+                  }`}>
+                    Papel: {userEventRole === 'admin' ? 'Administrador' : 'Operador'}
+                  </span>
+                </div>
+              )}
             </div>
           )}
 
@@ -114,10 +145,15 @@ export const AdminSidebar: React.FC<AdminSidebarProps> = ({ isOpen, onClose }) =
           {/* Navigation Links */}
           <nav className="mt-2 space-y-1.5">
             {navItems.map((item) => {
-              const Icon = item.icon;
-              const isLocked = item.requiresEvent && !currentEventId;
+              if (item.requiresSuperadmin && !isSuperadmin) {
+                return null;
+              }
 
-              if (isLocked) {
+              const Icon = item.icon;
+              const isLockedByEvent = item.requiresEvent && !currentEventId;
+              const isLockedByAdmin = currentEventId && item.requiresAdmin && !isEventAdmin;
+
+              if (isLockedByEvent) {
                 return (
                   <div
                     key={item.path}
@@ -128,6 +164,25 @@ export const AdminSidebar: React.FC<AdminSidebarProps> = ({ isOpen, onClose }) =
                       <Icon className="w-4 h-4 text-gray-600" />
                       <span>{item.name}</span>
                     </div>
+                  </div>
+                );
+              }
+
+              if (isLockedByAdmin) {
+                return (
+                  <div
+                    key={item.path}
+                    className="flex items-center justify-between px-3.5 py-3 rounded-xl text-sm font-semibold text-gray-500 cursor-not-allowed select-none opacity-40"
+                    title="Módulo restrito ao Administrador deste evento (perfil atual: Operador)"
+                  >
+                    <div className="flex items-center gap-3">
+                      <Icon className="w-4 h-4 text-gray-500" />
+                      <span>{item.name}</span>
+                    </div>
+                    <span className="flex items-center gap-1 text-[9px] uppercase font-bold text-gray-400">
+                      <Lock className="w-3 h-3" />
+                      Admin
+                    </span>
                   </div>
                 );
               }

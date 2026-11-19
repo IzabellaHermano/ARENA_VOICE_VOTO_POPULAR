@@ -52,16 +52,45 @@ export const ProtectedRoute: React.FC<ProtectedRouteProps> = ({
           </h2>
 
           <p className="text-xs sm:text-sm text-gray-400 mb-6 leading-relaxed">
-            Seu perfil atual (<span className="text-white font-bold uppercase">{role}</span>) não possui permissão para gerenciar outros administradores do sistema.
+            Seu perfil atual (<span className="text-white font-bold uppercase">{role}</span>) não possui permissão para acessar este módulo administrativo do sistema.
           </p>
 
           <AdminActionButton
             variant="secondary"
-            onClick={() => navigate('/admin/projetos')}
+            onClick={() => navigate('/admin/eventos')}
             icon={<ArrowLeft className="w-4 h-4" />}
             className="w-full py-3"
           >
-            Voltar ao Painel de Projetos
+            Voltar aos Meus Eventos
+          </AdminActionButton>
+        </div>
+      </div>
+    );
+  }
+
+  if (requiredRole === 'admin' && role !== 'superadmin' && role !== 'admin') {
+    return (
+      <div className="min-h-[70vh] flex flex-col items-center justify-center p-4 text-center">
+        <div className="max-w-md w-full bg-arena-card border border-arena-border rounded-3xl p-6 sm:p-8 shadow-2xl flex flex-col items-center">
+          <div className="w-16 h-16 rounded-2xl bg-arena-red/15 border border-arena-red/30 flex items-center justify-center text-arena-red mb-4 shadow-red-glow">
+            <ShieldAlert className="w-8 h-8" />
+          </div>
+
+          <h2 className="text-xl font-black text-white uppercase tracking-tight mb-2">
+            Acesso Restrito ao Administrador
+          </h2>
+
+          <p className="text-xs sm:text-sm text-gray-400 mb-6 leading-relaxed">
+            Seu perfil atual (<span className="text-white font-bold uppercase">{role}</span>) possui nível operacional. A criação e alteração deste módulo são exclusivas de Administradores.
+          </p>
+
+          <AdminActionButton
+            variant="secondary"
+            onClick={() => navigate('/admin/votacao')}
+            icon={<ArrowLeft className="w-4 h-4" />}
+            className="w-full py-3"
+          >
+            Ir para Controle de Votação
           </AdminActionButton>
         </div>
       </div>

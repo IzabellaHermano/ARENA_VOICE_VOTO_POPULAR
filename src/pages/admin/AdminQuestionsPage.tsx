@@ -23,7 +23,7 @@ import {
 
 export const AdminQuestionsPage: React.FC = () => {
   const navigate = useNavigate();
-  const { currentEventId, currentEvent, clearSelectedEvent } = useAdminEvent();
+  const { currentEventId, currentEvent, clearSelectedEvent, isEventAdmin } = useAdminEvent();
 
   const [questions, setQuestions] = useState<EventQuestion[]>([]);
   const [isLoading, setIsLoading] = useState<boolean>(true);
@@ -86,6 +86,10 @@ export const AdminQuestionsPage: React.FC = () => {
 
   // Abertura do Modal para Criação
   const handleOpenCreateModal = () => {
+    if (!isEventAdmin) {
+      setErrorMessage('Operação não permitida: Apenas administradores do evento podem cadastrar critérios.');
+      return;
+    }
     setEditingQuestion(null);
     setModalTitle('');
     setModalDescription('');
@@ -96,6 +100,10 @@ export const AdminQuestionsPage: React.FC = () => {
 
   // Abertura do Modal para Edição
   const handleOpenEditModal = (q: EventQuestion) => {
+    if (!isEventAdmin) {
+      setErrorMessage('Operação não permitida: Apenas administradores do evento podem editar critérios.');
+      return;
+    }
     setEditingQuestion(q);
     setModalTitle(q.title);
     setModalDescription(q.description || '');
@@ -108,6 +116,10 @@ export const AdminQuestionsPage: React.FC = () => {
   const handleSaveModal = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!currentEventId || !modalTitle.trim()) return;
+    if (!isEventAdmin) {
+      setErrorMessage('Operação não permitida: Apenas administradores do evento podem salvar alterações.');
+      return;
+    }
 
     setIsSubmitting(true);
     setErrorMessage(null);
@@ -147,6 +159,10 @@ export const AdminQuestionsPage: React.FC = () => {
   // Alternar Ativo/Inativo
   const handleToggleActive = async (q: EventQuestion) => {
     if (!currentEventId) return;
+    if (!isEventAdmin) {
+      setErrorMessage('Operação não permitida: Apenas administradores do evento podem alterar o status de critérios.');
+      return;
+    }
     try {
       const nextActive = await QuestionService.toggleActive(currentEventId, q.id, q.active);
       setQuestions((prev) =>
@@ -163,6 +179,7 @@ export const AdminQuestionsPage: React.FC = () => {
   // Mover para Cima
   const handleMoveUp = async (index: number) => {
     if (index === 0 || !currentEventId) return;
+    if (!isEventAdmin) return;
     const newList = [...questions];
     const temp = newList[index - 1];
     newList[index - 1] = newList[index];
@@ -183,6 +200,7 @@ export const AdminQuestionsPage: React.FC = () => {
   // Mover para Baixo
   const handleMoveDown = async (index: number) => {
     if (index === questions.length - 1 || !currentEventId) return;
+    if (!isEventAdmin) return;
     const newList = [...questions];
     const temp = newList[index + 1];
     newList[index + 1] = newList[index];
@@ -203,6 +221,10 @@ export const AdminQuestionsPage: React.FC = () => {
   // Confirmar Exclusão
   const handleConfirmDelete = async () => {
     if (!currentEventId || !deleteModal.question) return;
+    if (!isEventAdmin) {
+      setErrorMessage('Operação não permitida: Apenas administradores do evento podem excluir critérios.');
+      return;
+    }
     setDeleteModal((prev) => ({ ...prev, isDeleting: true }));
 
     try {
@@ -258,17 +280,30 @@ export const AdminQuestionsPage: React.FC = () => {
               Trocar Evento
             </button>
 
-            <button
-              type="button"
-              onClick={handleOpenCreateModal}
-              className="px-4 py-2.5 rounded-xl bg-arena-red hover:bg-red-700 text-white font-bold text-xs flex items-center gap-2 shadow-red-glow transition-all"
-            >
-              <Plus className="w-4 h-4" />
-              Nova Pergunta
-            </button>
+            {isEventAdmin && (
+              <button
+                type="button"
+                onClick={handleOpenCreateModal}
+                className="px-4 py-2.5 rounded-xl bg-arena-red hover:bg-red-700 text-white font-bold text-xs flex items-center gap-2 shadow-red-glow transition-all"
+              >
+                <Plus className="w-4 h-4" />
+                Nova Pergunta
+              </button>
+            )}
           </div>
         </div>
       </div>
+
+      {/* Alerta de Modo Operador (Somente Leitura) */}
+      {!isEventAdmin && (
+        <div className="p-4 rounded-2xl bg-amber-500/10 border border-amber-500/30 text-amber-300 text-xs flex items-center gap-3 shadow-md">
+          <ShieldAlert className="w-5 h-5 text-amber-400 shrink-0" />
+          <div className="leading-relaxed">
+            <span className="font-bold text-amber-200">Modo Somente Leitura (Operador):</span>{' '}
+            Você pode consultar os critérios e perguntas configurados para este evento. Apenas o Administrador do evento possui autorização para criar, alterar a ordem ou remover critérios de avaliação.
+          </div>
+        </div>
+      )}
 
       {/* Alertas */}
       {errorMessage && (
@@ -384,64 +419,66 @@ export const AdminQuestionsPage: React.FC = () => {
                     </div>
                   </div>
 
-                  {/* Ações e Reordenação */}
-                  <div className="flex items-center gap-2 self-end md:self-center shrink-0">
-                    {/* Botões de Reordenação */}
-                    <div className="flex items-center border border-arena-border rounded-lg overflow-hidden bg-black/40 mr-2">
+                  {/* Ações e Reordenação (Exclusivo para Administrador) */}
+                  {isEventAdmin && (
+                    <div className="flex items-center gap-2 self-end md:self-center shrink-0">
+                      {/* Botões de Reordenação */}
+                      <div className="flex items-center border border-arena-border rounded-lg overflow-hidden bg-black/40 mr-2">
+                        <button
+                          type="button"
+                          onClick={() => handleMoveUp(index)}
+                          disabled={isFirst}
+                          title="Mover para cima"
+                          className="p-1.5 text-gray-400 hover:text-white disabled:opacity-30 disabled:hover:text-gray-400 hover:bg-white/10 transition-colors"
+                        >
+                          <ArrowUp className="w-4 h-4" />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleMoveDown(index)}
+                          disabled={isLast}
+                          title="Mover para baixo"
+                          className="p-1.5 text-gray-400 hover:text-white disabled:opacity-30 disabled:hover:text-gray-400 hover:bg-white/10 transition-colors border-l border-arena-border/60"
+                        >
+                          <ArrowDown className="w-4 h-4" />
+                        </button>
+                      </div>
+
+                      {/* Botão de Ativar / Desativar */}
                       <button
                         type="button"
-                        onClick={() => handleMoveUp(index)}
-                        disabled={isFirst}
-                        title="Mover para cima"
-                        className="p-1.5 text-gray-400 hover:text-white disabled:opacity-30 disabled:hover:text-gray-400 hover:bg-white/10 transition-colors"
+                        onClick={() => handleToggleActive(q)}
+                        className={`px-2.5 py-1.5 rounded-lg text-xs font-semibold border transition-colors ${
+                          q.active
+                            ? 'border-emerald-500/40 text-emerald-300 hover:bg-emerald-500/10'
+                            : 'border-gray-600 text-gray-400 hover:bg-gray-800'
+                        }`}
+                        title={q.active ? 'Desativar este critério' : 'Ativar este critério'}
                       >
-                        <ArrowUp className="w-4 h-4" />
+                        {q.active ? 'Desativar' : 'Ativar'}
                       </button>
+
+                      {/* Botão de Edição */}
                       <button
                         type="button"
-                        onClick={() => handleMoveDown(index)}
-                        disabled={isLast}
-                        title="Mover para baixo"
-                        className="p-1.5 text-gray-400 hover:text-white disabled:opacity-30 disabled:hover:text-gray-400 hover:bg-white/10 transition-colors border-l border-arena-border/60"
+                        onClick={() => handleOpenEditModal(q)}
+                        className="p-2 rounded-lg text-gray-400 hover:text-white hover:bg-white/10 border border-arena-border transition-colors"
+                        title="Editar critério"
                       >
-                        <ArrowDown className="w-4 h-4" />
+                        <Edit2 className="w-4 h-4" />
+                      </button>
+
+                      {/* Botão de Exclusão */}
+                      <button
+                        type="button"
+                        onClick={() => setDeleteModal({ isOpen: true, question: q, isDeleting: false })}
+                        className="p-2 rounded-lg text-gray-400 hover:text-arena-red hover:bg-arena-red/10 border border-arena-border transition-colors"
+                        title="Excluir critério"
+                      >
+                        <Trash2 className="w-4 h-4" />
                       </button>
                     </div>
-
-                    {/* Botão de Ativar / Desativar */}
-                    <button
-                      type="button"
-                      onClick={() => handleToggleActive(q)}
-                      className={`px-2.5 py-1.5 rounded-lg text-xs font-semibold border transition-colors ${
-                        q.active
-                          ? 'border-emerald-500/40 text-emerald-300 hover:bg-emerald-500/10'
-                          : 'border-gray-600 text-gray-400 hover:bg-gray-800'
-                      }`}
-                      title={q.active ? 'Desativar este critério' : 'Ativar este critério'}
-                    >
-                      {q.active ? 'Desativar' : 'Ativar'}
-                    </button>
-
-                    {/* Botão de Edição */}
-                    <button
-                      type="button"
-                      onClick={() => handleOpenEditModal(q)}
-                      className="p-2 rounded-lg text-gray-400 hover:text-white hover:bg-white/10 border border-arena-border transition-colors"
-                      title="Editar critério"
-                    >
-                      <Edit2 className="w-4 h-4" />
-                    </button>
-
-                    {/* Botão de Exclusão */}
-                    <button
-                      type="button"
-                      onClick={() => setDeleteModal({ isOpen: true, question: q, isDeleting: false })}
-                      className="p-2 rounded-lg text-gray-400 hover:text-arena-red hover:bg-arena-red/10 border border-arena-border transition-colors"
-                      title="Excluir critério"
-                    >
-                      <Trash2 className="w-4 h-4" />
-                    </button>
-                  </div>
+                  )}
                 </div>
               );
             })}

@@ -23,7 +23,7 @@ import {
 
 export const AdminSettingsPage: React.FC = () => {
   const navigate = useNavigate();
-  const { currentEventId, currentEvent, refreshCurrentEvent } = useAdminEvent();
+  const { currentEventId, currentEvent, refreshCurrentEvent, isEventAdmin } = useAdminEvent();
   const activeEventId = currentEventId || DEFAULT_EVENT_ID;
 
   // Redireciona para Meus Eventos se nenhum evento foi selecionado
@@ -135,6 +135,10 @@ export const AdminSettingsPage: React.FC = () => {
 
   // 4. Salvar configurações gerais e persistir no Supabase
   const executeSave = async () => {
+    if (!isEventAdmin) {
+      setErrorMessage('Operação não permitida: Apenas administradores do evento podem salvar alterações.');
+      return;
+    }
     setIsSaving(true);
     setErrorMessage(null);
 
@@ -192,6 +196,10 @@ export const AdminSettingsPage: React.FC = () => {
 
   // 5. Recalcular Resultados explicitamente
   const handleRecalculateResults = async () => {
+    if (!isEventAdmin) {
+      setErrorMessage('Operação não permitida: Apenas administradores do evento podem recalcular resultados.');
+      return;
+    }
     if (!window.confirm(
       `Deseja realmente recalcular todos os resultados do evento "${eventName || activeEventId}" utilizando o peso atual de ${popularWeight}%?`
     )) {
@@ -254,6 +262,17 @@ export const AdminSettingsPage: React.FC = () => {
         <div className="p-4 rounded-xl bg-arena-red/15 border border-arena-red/40 text-arena-red text-xs flex items-center gap-3">
           <AlertTriangle className="w-5 h-5 shrink-0" />
           <span>{errorMessage}</span>
+        </div>
+      )}
+
+      {/* Alerta de Modo Operador (Somente Leitura) */}
+      {!isEventAdmin && (
+        <div className="p-4 rounded-2xl bg-amber-500/10 border border-amber-500/30 text-amber-300 text-xs flex items-center gap-3 shadow-md">
+          <AlertTriangle className="w-5 h-5 text-amber-400 shrink-0" />
+          <div className="leading-relaxed">
+            <span className="font-bold text-amber-200">Modo Somente Leitura (Operador):</span>{' '}
+            Você pode consultar os parâmetros e preferências configuradas para este evento. Apenas o Administrador do evento possui autorização para alterar tempo de rodada, pesos e ordem de apresentação.
+          </div>
         </div>
       )}
 
@@ -672,18 +691,20 @@ export const AdminSettingsPage: React.FC = () => {
           </div>
         )}
 
-        {/* Botão de Salvar Alterações */}
-        <div className="pt-2 flex justify-end">
-          <AdminActionButton
-            type="submit"
-            variant="gold"
-            isLoading={isSaving}
-            icon={<Save className="w-4 h-4" />}
-            className="w-full sm:w-auto px-8 py-3.5"
-          >
-            SALVAR CONFIGURAÇÕES DO EVENTO
-          </AdminActionButton>
-        </div>
+        {/* Botão de Salvar Alterações (Apenas Administrador) */}
+        {isEventAdmin && (
+          <div className="pt-2 flex justify-end">
+            <AdminActionButton
+              type="submit"
+              variant="gold"
+              isLoading={isSaving}
+              icon={<Save className="w-4 h-4" />}
+              className="w-full sm:w-auto px-8 py-3.5"
+            >
+              SALVAR CONFIGURAÇÕES DO EVENTO
+            </AdminActionButton>
+          </div>
+        )}
       </form>
     </div>
   );

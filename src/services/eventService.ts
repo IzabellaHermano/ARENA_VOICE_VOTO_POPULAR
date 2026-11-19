@@ -168,7 +168,12 @@ export const EventService = {
   /**
    * Verifica se um usuário possui acesso a um evento específico
    */
-  async hasUserEventAccess(eventId: string, userId: string, role?: string): Promise<boolean> {
+  async hasUserEventAccess(
+    eventId: string,
+    userId: string,
+    role?: string,
+    requiredRole: 'operator' | 'admin' = 'operator'
+  ): Promise<boolean> {
     if (!eventId || !userId) return false;
 
     // Superadmin sempre tem acesso irrestrito
@@ -176,23 +181,31 @@ export const EventService = {
 
     if (isSupabaseConfigured) {
       try {
-        // 1. Tenta verificar via RPC atômica segura (se implementada no Supabase)
-        const { data: rpcAccess, error: rpcErr } = await supabase.rpc('has_event_access', {
-          p_event_id: eventId,
-        });
-        if (!rpcErr && typeof rpcAccess === 'boolean') {
-          return rpcAccess;
+        // 1. Tenta verificar via RPC atômica segura has_event_access
+        try {
+          const { data: rpcAccess, error: rpcErr } = await supabase.rpc('has_event_access', {
+            p_event_id: eventId,
+            p_required_role: requiredRole,
+          });
+          if (!rpcErr && typeof rpcAccess === 'boolean') {
+            return rpcAccess;
+          }
+        } catch {
+          // Ignora erro de assinatura e consulta tabela
         }
 
         // 2. Consulta direta na tabela public.event_admins
         const { data, error } = await supabase
           .from('event_admins')
-          .select('id')
+          .select('id, role')
           .eq('event_id', eventId)
           .eq('user_id', userId)
           .maybeSingle();
 
         if (!error && data) {
+          if (requiredRole === 'admin') {
+            return data.role === 'admin';
+          }
           return true;
         }
 
@@ -209,6 +222,37 @@ export const EventService = {
     }
 
     return true;
+  },
+
+  /**
+   * Consulta o papel efetivo do usuário para um determinado evento
+   */
+  async getUserEventRole(
+    eventId: string,
+    userId: string,
+    globalRole?: string
+  ): Promise<'superadmin' | 'admin' | 'operator' | null> {
+    if (!eventId || !userId) return null;
+    if (globalRole === 'superadmin') return 'superadmin';
+
+    if (isSupabaseConfigured) {
+      try {
+        const { data, error } = await supabase
+          .from('event_admins')
+          .select('role')
+          .eq('event_id', eventId)
+          .eq('user_id', userId)
+          .maybeSingle();
+
+        if (!error && data) {
+          return (data.role === 'admin' ? 'admin' : 'operator') as 'admin' | 'operator';
+        }
+      } catch (err) {
+        console.warn('Erro ao consultar papel no evento:', err);
+      }
+    }
+
+    return null;
   },
 
   /**

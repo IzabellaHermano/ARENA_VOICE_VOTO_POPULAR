@@ -125,7 +125,7 @@ export const AdminAuthProvider: React.FC<{ children: React.ReactNode }> = ({ chi
 
   const canManageUsers = isSuperadmin;
   const canManageProjects = isSuperadmin || role === 'admin';
-  const canControlRounds = isSuperadmin || role === 'admin';
+  const canControlRounds = isSuperadmin || role === 'admin' || role === 'operator';
 
   return (
     <AdminAuthContext.Provider

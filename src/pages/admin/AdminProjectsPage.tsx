@@ -19,7 +19,7 @@ import {
 
 export const AdminProjectsPage: React.FC = () => {
   const navigate = useNavigate();
-  const { currentEventId } = useAdminEvent();
+  const { currentEventId, isEventAdmin } = useAdminEvent();
   const activeEventId = currentEventId || DEFAULT_EVENT_ID;
 
   const [projects, setProjects] = useState<Project[]>([]);
@@ -111,17 +111,29 @@ export const AdminProjectsPage: React.FC = () => {
   };
 
   const handleOpenCreateModal = () => {
+    if (!isEventAdmin) {
+      setErrorMessage('Operação não permitida: Apenas administradores do evento podem cadastrar projetos.');
+      return;
+    }
     setEditingProject(null);
     setIsModalOpen(true);
   };
 
   const handleOpenEditModal = (project: Project) => {
+    if (!isEventAdmin) {
+      setErrorMessage('Operação não permitida: Apenas administradores do evento podem editar projetos.');
+      return;
+    }
     setEditingProject(project);
     setIsModalOpen(true);
   };
 
   // 1. ALTERNAR ATIVAÇÃO NO SUPABASE
   const handleToggleActive = async (project: Project) => {
+    if (!isEventAdmin) {
+      setErrorMessage('Operação não permitida: Apenas administradores do evento podem alterar o status de projetos.');
+      return;
+    }
     setErrorMessage(null);
     try {
       const nextActive = !project.ativo;
@@ -174,6 +186,10 @@ export const AdminProjectsPage: React.FC = () => {
 
   // 3. FLUXO DE EXCLUSÃO SEGURA / PROTEÇÃO DE HISTÓRICO
   const handleRequestDelete = async (project: Project) => {
+    if (!isEventAdmin) {
+      setErrorMessage('Operação não permitida: Apenas administradores do evento podem excluir projetos.');
+      return;
+    }
     setErrorMessage(null);
     setDeleteModalState({
       isOpen: true,
@@ -302,15 +318,28 @@ export const AdminProjectsPage: React.FC = () => {
             <span>QR Code</span>
           </a>
 
-          <AdminActionButton
-            onClick={handleOpenCreateModal}
-            variant="secondary"
-            icon={<Plus className="w-4 h-4 text-arena-gold" />}
-          >
-            Cadastrar Projeto
-          </AdminActionButton>
+          {isEventAdmin && (
+            <AdminActionButton
+              onClick={handleOpenCreateModal}
+              variant="secondary"
+              icon={<Plus className="w-4 h-4 text-arena-gold" />}
+            >
+              Cadastrar Projeto
+            </AdminActionButton>
+          )}
         </div>
       </div>
+
+      {/* Alerta de Modo Operador (Somente Leitura para Projetos) */}
+      {!isEventAdmin && (
+        <div className="p-4 rounded-2xl bg-amber-500/10 border border-amber-500/30 text-amber-300 text-xs flex items-center gap-3 shadow-md">
+          <AlertTriangle className="w-5 h-5 text-amber-400 shrink-0" />
+          <div className="leading-relaxed">
+            <span className="font-bold text-amber-200">Modo Somente Leitura (Operador):</span>{' '}
+            Você pode visualizar projetos e selecionar o projeto ativo para liberar a rodada de votação. Apenas o Administrador do evento possui autorização para criar, editar ou desativar projetos.
+          </div>
+        </div>
+      )}
 
       {/* Alertas de Notificação */}
       {errorMessage && (
@@ -351,6 +380,7 @@ export const AdminProjectsPage: React.FC = () => {
               key={project.id}
               project={project}
               isSelected={selectedProjectId === project.id}
+              canManage={isEventAdmin}
               onSelect={handleSelectProject}
               onEdit={handleOpenEditModal}
               onToggleActive={handleToggleActive}

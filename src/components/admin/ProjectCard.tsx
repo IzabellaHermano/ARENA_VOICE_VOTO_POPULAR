@@ -5,6 +5,7 @@ import { CheckCircle2, Circle, Edit2, Power, Layers, Trash2 } from 'lucide-react
 export interface ProjectCardProps {
   project: Project;
   isSelected: boolean;
+  canManage?: boolean;
   onSelect: (project: Project) => void;
   onEdit: (project: Project) => void;
   onToggleActive: (project: Project) => void;
@@ -14,6 +15,7 @@ export interface ProjectCardProps {
 export const ProjectCard: React.FC<ProjectCardProps> = ({
   project,
   isSelected,
+  canManage = true,
   onSelect,
   onEdit,
   onToggleActive,
@@ -88,48 +90,50 @@ export const ProjectCard: React.FC<ProjectCardProps> = ({
         </p>
       </div>
 
-      {/* Actions Toolbar */}
-      <div
-        onClick={(e) => e.stopPropagation()}
-        className="pt-3 border-t border-arena-border/60 flex items-center justify-between text-xs gap-1"
-      >
-        <button
-          type="button"
-          onClick={() => onToggleActive(project)}
-          className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[11px] font-bold transition-colors ${
-            project.ativo
-              ? 'text-gray-400 hover:text-arena-red hover:bg-white/5'
-              : 'text-arena-green hover:bg-arena-green/10'
-          }`}
-          title={project.ativo ? 'Desativar projeto' : 'Ativar projeto'}
+      {/* Actions Toolbar (Restrito a Administradores) */}
+      {canManage && (
+        <div
+          onClick={(e) => e.stopPropagation()}
+          className="pt-3 border-t border-arena-border/60 flex items-center justify-between text-xs gap-1"
         >
-          <Power className="w-3.5 h-3.5" />
-          <span>{project.ativo ? 'Desativar' : 'Ativar'}</span>
-        </button>
-
-        <div className="flex items-center gap-1">
           <button
             type="button"
-            onClick={() => onEdit(project)}
-            className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[11px] font-bold text-gray-300 hover:text-white hover:bg-white/5 transition-colors"
-            title="Editar dados do projeto"
+            onClick={() => onToggleActive(project)}
+            className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[11px] font-bold transition-colors ${
+              project.ativo
+                ? 'text-gray-400 hover:text-arena-red hover:bg-white/5'
+                : 'text-arena-green hover:bg-arena-green/10'
+            }`}
+            title={project.ativo ? 'Desativar projeto' : 'Ativar projeto'}
           >
-            <Edit2 className="w-3.5 h-3.5 text-arena-gold" />
-            <span>Editar</span>
+            <Power className="w-3.5 h-3.5" />
+            <span>{project.ativo ? 'Desativar' : 'Ativar'}</span>
           </button>
 
-          {onDelete && (
+          <div className="flex items-center gap-1">
             <button
               type="button"
-              onClick={() => onDelete(project)}
-              className="p-1.5 rounded-lg text-gray-400 hover:text-arena-red hover:bg-arena-red/10 transition-colors"
-              title="Excluir projeto"
+              onClick={() => onEdit(project)}
+              className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[11px] font-bold text-gray-300 hover:text-white hover:bg-white/5 transition-colors"
+              title="Editar dados do projeto"
             >
-              <Trash2 className="w-3.5 h-3.5" />
+              <Edit2 className="w-3.5 h-3.5 text-arena-gold" />
+              <span>Editar</span>
             </button>
-          )}
+
+            {onDelete && (
+              <button
+                type="button"
+                onClick={() => onDelete(project)}
+                className="p-1.5 rounded-lg text-gray-400 hover:text-arena-red hover:bg-arena-red/10 transition-colors"
+                title="Excluir projeto"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+              </button>
+            )}
+          </div>
         </div>
-      </div>
+      )}
     </div>
   );
 };
