@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Project } from '@/types';
-import { EventService, DEFAULT_EVENT_ID, ProjectHistoryCheck } from '@/services/eventService';
+import { EventService, ProjectHistoryCheck } from '@/services/eventService';
 import { useAdminEvent } from '@/contexts/AdminEventContext';
 import { ProjectCard, ProjectForm, AdminActionButton } from '@/components/admin';
 import {
@@ -20,7 +20,7 @@ import {
 export const AdminProjectsPage: React.FC = () => {
   const navigate = useNavigate();
   const { currentEventId, isEventAdmin } = useAdminEvent();
-  const activeEventId = currentEventId || DEFAULT_EVENT_ID;
+  const activeEventId = currentEventId || '';
 
   const [projects, setProjects] = useState<Project[]>([]);
   const [selectedProjectId, setSelectedProjectId] = useState<string>('');

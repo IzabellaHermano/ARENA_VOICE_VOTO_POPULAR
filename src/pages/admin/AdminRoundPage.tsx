@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Project, RoundStatus as RoundStatusType, RoundDocument, ResultDocument, EventSettings } from '@/types';
-import { EventService, DEFAULT_EVENT_ID } from '@/services/eventService';
+import { EventService } from '@/services/eventService';
 import { SettingsService } from '@/services/settingsService';
 import { useAdminEvent } from '@/contexts/AdminEventContext';
 import {
@@ -33,7 +33,7 @@ import {
 export const AdminRoundPage: React.FC = () => {
   const navigate = useNavigate();
   const { currentEventId } = useAdminEvent();
-  const activeEventId = currentEventId || DEFAULT_EVENT_ID;
+  const activeEventId = currentEventId || '';
 
   // Redireciona para Meus Eventos se nenhum evento foi selecionado
   useEffect(() => {

@@ -88,8 +88,12 @@ export const VotingProvider: React.FC<VotingProviderProps> = ({ children }) => {
 
   // Evento efetivo resolvido
   const activeEventId = useMemo(() => {
-    return pathEventId || queryEventId || adminEventId || activeDbEventId || DEFAULT_EVENT_ID;
-  }, [pathEventId, queryEventId, adminEventId, activeDbEventId]);
+    // Em rotas administrativas, utiliza exclusivamente o evento selecionado no contexto administrativo
+    if (location.pathname.startsWith('/admin')) {
+      return adminEventId || null;
+    }
+    return pathEventId || queryEventId || adminEventId || activeDbEventId || null;
+  }, [location.pathname, pathEventId, queryEventId, adminEventId, activeDbEventId]);
 
   // Função centralizada para inicializar sessão anônima via Supabase
   const initAnonymousSession = useCallback(async () => {

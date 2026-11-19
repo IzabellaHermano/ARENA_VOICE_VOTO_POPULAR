@@ -29,7 +29,13 @@ import {
 export const AdminEventsPage: React.FC = () => {
   const navigate = useNavigate();
   const { adminUser, role, isSuperadmin } = useAdminAuth();
-  const { selectEvent, authorizationError, clearAuthorizationError } = useAdminEvent();
+  const {
+    currentEventId,
+    selectEvent,
+    clearSelectedEvent,
+    authorizationError,
+    clearAuthorizationError,
+  } = useAdminEvent();
 
   const [events, setEvents] = useState<EventSummary[]>([]);
   const [isLoading, setIsLoading] = useState<boolean>(true);
@@ -146,6 +152,9 @@ export const AdminEventsPage: React.FC = () => {
     try {
       await EventService.deleteEvent(eventToDelete.id);
       setEvents((prev) => prev.filter((e) => e.id !== eventToDelete.id));
+      if (currentEventId === eventToDelete.id) {
+        clearSelectedEvent();
+      }
       setSuccessMessage(`Evento "${eventToDelete.name}" excluído com sucesso!`);
       closeDeleteModal();
       setTimeout(() => setSuccessMessage(null), 4000);

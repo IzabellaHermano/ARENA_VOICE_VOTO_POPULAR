@@ -233,11 +233,22 @@ export const EventService = {
   ): Promise<boolean> {
     if (!eventId || !userId) return false;
 
-    // Superadmin sempre tem acesso irrestrito
-    if (role === 'superadmin') return true;
-
     if (isSupabaseConfigured) {
       try {
+        // 0. Verifica se o evento de fato existe no banco
+        const { data: evExists } = await supabase
+          .from('events')
+          .select('id')
+          .eq('id', eventId)
+          .maybeSingle();
+
+        if (!evExists) {
+          return false;
+        }
+
+        // Superadmin sempre tem acesso irrestrito a eventos existentes
+        if (role === 'superadmin') return true;
+
         // 1. Tenta verificar via RPC atômica segura has_event_access
         try {
           const { data: rpcAccess, error: rpcErr } = await supabase.rpc('has_event_access', {

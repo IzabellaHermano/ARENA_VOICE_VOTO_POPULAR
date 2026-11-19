@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { EventSettings, EventSettingsHistoryItem, Project } from '@/types';
-import { EventService, DEFAULT_EVENT_ID } from '@/services/eventService';
+import { EventService } from '@/services/eventService';
 import { SettingsService } from '@/services/settingsService';
 import { useAdminEvent } from '@/contexts/AdminEventContext';
 import { AdminActionButton } from '@/components/admin';
@@ -24,7 +24,7 @@ import {
 export const AdminSettingsPage: React.FC = () => {
   const navigate = useNavigate();
   const { currentEventId, currentEvent, refreshCurrentEvent, isEventAdmin } = useAdminEvent();
-  const activeEventId = currentEventId || DEFAULT_EVENT_ID;
+  const activeEventId = currentEventId || '';
 
   // Redireciona para Meus Eventos se nenhum evento foi selecionado
   useEffect(() => {

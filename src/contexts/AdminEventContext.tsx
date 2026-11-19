@@ -109,7 +109,13 @@ export const AdminEventProvider: React.FC<{ children: React.ReactNode }> = ({ ch
           if (eventDoc) {
             setCurrentEvent(eventDoc);
           } else {
+            // Se o evento foi excluído do banco, limpa imediatamente a seleção
             setCurrentEvent(null);
+            setCurrentEventId(null);
+            setUserEventRole(null);
+            if (typeof window !== 'undefined') {
+              localStorage.removeItem(STORAGE_KEY);
+            }
           }
         },
         (err) => {

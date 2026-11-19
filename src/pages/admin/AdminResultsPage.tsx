@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { ArenaLogo } from '@/components/branding';
-import { EventService, DEFAULT_EVENT_ID, mapResultRow } from '@/services/eventService';
+import { EventService, mapResultRow } from '@/services/eventService';
 import { useAdminEvent } from '@/contexts/AdminEventContext';
 import { ProjectDocument, ResultDocument, EventDocument, EventSettings } from '@/types';
 import { SettingsService } from '@/services/settingsService';
@@ -29,7 +29,7 @@ import {
 export const AdminResultsPage: React.FC = () => {
   const navigate = useNavigate();
   const { currentEventId } = useAdminEvent();
-  const activeEventId = currentEventId || DEFAULT_EVENT_ID;
+  const activeEventId = currentEventId || '';
 
   // Redireciona para Meus Eventos se nenhum evento foi selecionado
   useEffect(() => {
