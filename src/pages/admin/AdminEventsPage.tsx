@@ -5,6 +5,7 @@ import { useAdminEvent } from '@/contexts/AdminEventContext';
 import { EventService, EventSummary, EventHistoryCheck } from '@/services/eventService';
 import { EventBannerUpload } from '@/components/admin/EventBannerUpload';
 import { ArenaLogo } from '@/components/branding';
+import { handleUserError } from '@/utils/errorHandler';
 import {
   Calendar,
   Trophy,

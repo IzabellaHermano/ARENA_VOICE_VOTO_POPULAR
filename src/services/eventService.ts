@@ -9,6 +9,7 @@ import {
 import { calculateApprovalStats, ApprovalStats } from '@/utils/approvalCalculator';
 import { AdminMockService } from './adminMockService';
 import { QuestionService } from './questionService';
+import { logTechnicalError, formatUserErrorMessage, handleUserError } from '@/utils/errorHandler';
 
 export type { ApprovalStats };
 
@@ -82,11 +83,18 @@ export interface ProjectHistoryCheck {
 export interface EventHistoryCheck {
   hasHistory: boolean;
   canDelete: boolean;
+  exists?: boolean;
   projectsCount: number;
   roundsCount: number;
   votesCount: number;
   resultsCount: number;
   summary: string;
+}
+
+export interface DeleteEventResult {
+  success: boolean;
+  id: string;
+  alreadyDeleted?: boolean;
 }
 
 export type Unsubscribe = () => void;
@@ -328,18 +336,7 @@ export const EventService = {
    */
   async listEvents(userContext?: { userId?: string; role?: string }): Promise<EventSummary[]> {
     if (!isSupabaseConfigured) {
-      return [{
-        id: DEFAULT_EVENT_ID,
-        name: 'Arena Voice 2026',
-        description: 'Competição oficial de inovação com voto popular em tempo real.',
-        status: 'active',
-        currentRoundId: null,
-        currentProjectId: null,
-        resultsPublished: false,
-        createdAt: { seconds: Date.now() / 1000, nanoseconds: 0 } as any,
-        updatedAt: { seconds: Date.now() / 1000, nanoseconds: 0 } as any,
-        projectsCount: 1,
-      }];
+      return [];
     }
 
     const { data: events, error } = await supabase
@@ -348,7 +345,8 @@ export const EventService = {
       .order('created_at', { ascending: false });
 
     if (error) {
-      throw new Error(`Falha ao listar eventos no Supabase: ${error.message}`);
+      logTechnicalError(error, { operation: 'Listagem de Eventos' });
+      throw new Error(formatUserErrorMessage(error, { operation: 'Listagem de Eventos' }));
     }
 
     // Se o usuário não for superadmin, filtra apenas os eventos aos quais foi atribuído
@@ -396,18 +394,7 @@ export const EventService = {
     userContext?: { userId?: string; role?: string }
   ): Unsubscribe {
     if (!isSupabaseConfigured) {
-      onUpdate([{
-        id: DEFAULT_EVENT_ID,
-        name: 'Arena Voice 2026',
-        description: 'Competição oficial de inovação com voto popular em tempo real.',
-        status: 'active',
-        currentRoundId: null,
-        currentProjectId: null,
-        resultsPublished: false,
-        createdAt: { seconds: Date.now() / 1000, nanoseconds: 0 } as any,
-        updatedAt: { seconds: Date.now() / 1000, nanoseconds: 0 } as any,
-        projectsCount: 1,
-      }]);
+      onUpdate([]);
       return () => {};
     }
 
@@ -516,16 +503,18 @@ export const EventService = {
           .single();
 
         if (fallbackError) {
-          throw new Error(`Falha ao criar evento no Supabase: ${fallbackError.message}`);
+          logTechnicalError(fallbackError, { operation: 'Cadastrar Evento', eventId: id });
+          throw new Error(formatUserErrorMessage(fallbackError, { operation: 'Cadastrar Evento', eventId: id }));
         }
         const createdFallback = mapEventRow(fallbackData);
         QuestionService.ensureDefaultQuestions(id).catch((err: any) => {
-          console.warn('[createEvent] Aviso ao semear perguntas padrão:', err);
+          logTechnicalError(err, { operation: 'Semear Perguntas Padrão', eventId: id });
         });
         return createdFallback;
       }
 
-      throw new Error(`Falha ao cadastrar evento: ${error.message}`);
+      logTechnicalError(error, { operation: 'Cadastrar Evento', eventId: id });
+      throw new Error(formatUserErrorMessage(error, { operation: 'Cadastrar Evento', eventId: id }));
     }
 
     const created = mapEventRow(data);
@@ -541,24 +530,22 @@ export const EventService = {
   async updateEvent(eventId: string, payload: UpdateEventPayload): Promise<EventDocument> {
     if (!eventId) throw new Error('ID do evento é obrigatório.');
 
-    // Se o bannerUrl, subtitle, eventDate ou description foram passados, busca a descrição existente para mesclar os metadados
-    let existingDesc = '';
-    if (
-      payload.bannerUrl !== undefined ||
-      payload.subtitle !== undefined ||
-      payload.eventDate !== undefined ||
-      payload.description !== undefined
-    ) {
-      try {
-        const { data: currentEv } = await supabase
-          .from('events')
-          .select('description')
-          .eq('id', eventId)
-          .maybeSingle();
-        existingDesc = currentEv?.description || '';
-      } catch {}
+    // 1. Verifica se o evento realmente existe no banco de dados
+    const { data: currentEv, error: checkError } = await supabase
+      .from('events')
+      .select('id, description')
+      .eq('id', eventId)
+      .maybeSingle();
+
+    if (!currentEv) {
+      logTechnicalError(
+        new Error(`[updateEvent] Evento com ID "${eventId}" não foi localizado no banco de dados para atualização.`),
+        { operation: 'Atualizar Evento', eventId }
+      );
+      throw new Error('Não foi possível localizar o evento solicitado para atualização. Atualize a página e tente novamente.');
     }
 
+    const existingDesc = currentEv.description || '';
     const baseDesc = payload.description !== undefined ? payload.description.trim() : existingDesc;
     const descWithMeta = encodeEventMeta(baseDesc, {
       bannerUrl: payload.bannerUrl !== undefined ? payload.bannerUrl.trim() : undefined,
@@ -605,11 +592,15 @@ export const EventService = {
           .select('*')
           .single();
 
-        if (retryError) throw new Error(`Falha ao atualizar evento: ${retryError.message}`);
+        if (retryError) {
+          logTechnicalError(retryError, { operation: 'Atualizar Evento (Fallback)', eventId });
+          throw new Error(formatUserErrorMessage(retryError, { operation: 'Atualizar Evento', eventId }));
+        }
         return mapEventRow(retryData);
       }
 
-      throw new Error(`Falha ao atualizar evento: ${error.message}`);
+      logTechnicalError(error, { operation: 'Atualizar Evento', eventId });
+      throw new Error(formatUserErrorMessage(error, { operation: 'Atualizar Evento', eventId }));
     }
 
     return mapEventRow(data);
@@ -624,6 +615,7 @@ export const EventService = {
       return {
         hasHistory: false,
         canDelete: false,
+        exists: false,
         projectsCount: 0,
         roundsCount: 0,
         votesCount: 0,
@@ -636,15 +628,36 @@ export const EventService = {
       return {
         hasHistory: false,
         canDelete: true,
+        exists: false,
         projectsCount: 0,
         roundsCount: 0,
         votesCount: 0,
         resultsCount: 0,
-        summary: 'Supabase não conectado.',
+        summary: 'Serviço de banco de dados não configurado.',
       };
     }
 
     try {
+      // 0. Verifica se o evento realmente existe no banco
+      const { data: eventRow } = await supabase
+        .from('events')
+        .select('id, name')
+        .eq('id', eventId)
+        .maybeSingle();
+
+      if (!eventRow) {
+        return {
+          hasHistory: false,
+          canDelete: true,
+          exists: false,
+          projectsCount: 0,
+          roundsCount: 0,
+          votesCount: 0,
+          resultsCount: 0,
+          summary: 'O evento não foi localizado no banco de dados. Ele será removido da tela.',
+        };
+      }
+
       const [projectsRes, roundsRes, resultsRes, votesRes] = await Promise.all([
         supabase.from('projects').select('id', { count: 'exact', head: true }).eq('event_id', eventId),
         supabase.from('rounds').select('id', { count: 'exact', head: true }).eq('event_id', eventId),
@@ -657,7 +670,7 @@ export const EventService = {
       let votesCount = votesRes.count || 0;
       const resultsCount = resultsRes.data?.length || 0;
 
-      // Se votesRes vier 0 por causa de RLS, confere a soma de total_votes em results
+      // Se votesRes vier 0 por causa de restrições de leitura, confere a soma de total_votes em results
       if (votesCount === 0 && resultsRes.data && resultsRes.data.length > 0) {
         votesCount = resultsRes.data.reduce((acc: number, r: any) => acc + Number(r.total_votes || 0), 0);
       }
@@ -676,6 +689,7 @@ export const EventService = {
       return {
         hasHistory,
         canDelete: !hasHistory,
+        exists: true,
         projectsCount,
         roundsCount,
         votesCount,
@@ -683,15 +697,16 @@ export const EventService = {
         summary,
       };
     } catch (err: any) {
-      console.warn('Erro ao verificar histórico do evento:', err);
+      logTechnicalError(err, { operation: 'Verificação de Histórico', eventId });
       return {
         hasHistory: false,
         canDelete: false,
+        exists: true,
         projectsCount: 0,
         roundsCount: 0,
         votesCount: 0,
         resultsCount: 0,
-        summary: `Falha ao verificar histórico: ${err.message}`,
+        summary: 'Não foi possível verificar o histórico do evento. Tente novamente.',
       };
     }
   },
@@ -701,13 +716,29 @@ export const EventService = {
    * Bloqueia exclusão física se houver histórico de votos ou rodadas.
    * Permite exclusão caso o evento seja seguro (sem histórico de votação).
    */
-  async deleteEvent(eventId: string, force = false): Promise<{ success: boolean; id: string }> {
+  async deleteEvent(eventId: string, force = false): Promise<DeleteEventResult> {
     if (!eventId) {
       throw new Error('Identificador do evento é obrigatório para exclusão.');
     }
 
     if (!isSupabaseConfigured) {
-      throw new Error('Supabase não está configurado.');
+      throw new Error('Serviço de banco de dados não configurado.');
+    }
+
+    // 0. Verifica primeiro se o evento realmente existe no banco de dados
+    const { data: existingEvent, error: findError } = await supabase
+      .from('events')
+      .select('id, name')
+      .eq('id', eventId)
+      .maybeSingle();
+
+    if (!existingEvent) {
+      logTechnicalError(
+        new Error(`[deleteEvent] Evento com ID "${eventId}" já não existe no banco de dados.`),
+        { operation: 'Exclusão de Evento', eventId }
+      );
+      // Retorna sucesso com flag alreadyDeleted para que o frontend limpe o estado sem erro
+      return { success: true, id: eventId, alreadyDeleted: true };
     }
 
     if (!force) {
@@ -723,35 +754,35 @@ export const EventService = {
     try {
       await supabase.from('event_questions').delete().eq('event_id', eventId);
     } catch (e) {
-      console.warn('Aviso ao remover event_questions na exclusão:', e);
+      logTechnicalError(e, { operation: 'Limpeza de event_questions na exclusão', eventId });
     }
 
     try {
       await supabase.from('event_admins').delete().eq('event_id', eventId);
     } catch (e) {
-      console.warn('Aviso ao remover event_admins na exclusão:', e);
+      logTechnicalError(e, { operation: 'Limpeza de event_admins na exclusão', eventId });
     }
 
     try {
       await supabase.from('event_settings').delete().eq('event_id', eventId);
     } catch (e) {
-      console.warn('Aviso ao remover event_settings na exclusão:', e);
+      logTechnicalError(e, { operation: 'Limpeza de event_settings na exclusão', eventId });
     }
 
     try {
       await supabase.from('projects').delete().eq('event_id', eventId);
     } catch (e) {
-      console.warn('Aviso ao remover projects na exclusão:', e);
+      logTechnicalError(e, { operation: 'Limpeza de projects na exclusão', eventId });
     }
 
     // 2. Remove o registro principal de public.events
     const { error } = await supabase.from('events').delete().eq('id', eventId);
     if (error) {
-      console.error('Erro ao excluir evento no Supabase:', error);
-      throw new Error(`Falha ao excluir evento do banco: ${error.message}`);
+      logTechnicalError(error, { operation: 'Exclusão de Evento', eventId });
+      throw new Error(formatUserErrorMessage(error, { operation: 'Exclusão de Evento', eventId }));
     }
 
-    return { success: true, id: eventId };
+    return { success: true, id: eventId, alreadyDeleted: false };
   },
 
   /**
@@ -759,6 +790,22 @@ export const EventService = {
    */
   async archiveEvent(eventId: string): Promise<EventDocument> {
     if (!eventId) throw new Error('ID do evento é obrigatório.');
+
+    // Verifica se o evento existe antes de tentar arquivar
+    const { data: ev } = await supabase
+      .from('events')
+      .select('id')
+      .eq('id', eventId)
+      .maybeSingle();
+
+    if (!ev) {
+      logTechnicalError(
+        new Error(`[archiveEvent] Tentativa de arquivar evento inexistente com ID "${eventId}".`),
+        { operation: 'Arquivar Evento', eventId }
+      );
+      throw new Error('Não foi possível localizar o evento solicitado para arquivamento.');
+    }
+
     return this.updateEvent(eventId, {
       status: 'finished',
     });
@@ -788,16 +835,7 @@ export const EventService = {
    */
   async getActiveEvent(): Promise<EventDocument | null> {
     if (!isSupabaseConfigured) {
-      return {
-        id: DEFAULT_EVENT_ID,
-        name: 'Arena Voice 2026',
-        status: 'active',
-        currentRoundId: null,
-        currentProjectId: null,
-        resultsPublished: false,
-        createdAt: { seconds: Date.now() / 1000, nanoseconds: 0 } as any,
-        updatedAt: { seconds: Date.now() / 1000, nanoseconds: 0 } as any,
-      };
+      return null;
     }
 
     try {
@@ -823,17 +861,8 @@ export const EventService = {
         .maybeSingle();
 
       if (latestActive) return mapEventRow(latestActive);
-
-      // 3. Fallback para DEFAULT_EVENT_ID
-      const { data: defaultEv } = await supabase
-        .from('events')
-        .select('*')
-        .eq('id', DEFAULT_EVENT_ID)
-        .maybeSingle();
-
-      if (defaultEv) return mapEventRow(defaultEv);
     } catch (err) {
-      console.warn('Erro ao consultar evento ativo no Supabase:', err);
+      logTechnicalError(err, { operation: 'Consultar Evento Ativo' });
     }
 
     return null;
@@ -847,19 +876,8 @@ export const EventService = {
     onUpdate: (event: EventDocument | null) => void,
     onError?: (err: Error) => void
   ): Unsubscribe {
-    if (!isSupabaseConfigured) {
-      const mockEvent = AdminMockService.getEventConfig();
-      const mockRound = AdminMockService.getRound();
-      onUpdate({
-        id: eventId,
-        name: mockEvent.nomeEvento,
-        status: 'active',
-        currentRoundId: null,
-        currentProjectId: mockRound.projetoAtualId,
-        resultsPublished: false,
-        createdAt: { seconds: Date.now() / 1000, nanoseconds: 0 } as any,
-        updatedAt: { seconds: Date.now() / 1000, nanoseconds: 0 } as any,
-      });
+    if (!isSupabaseConfigured || !eventId) {
+      onUpdate(null);
       return () => {};
     }
 
