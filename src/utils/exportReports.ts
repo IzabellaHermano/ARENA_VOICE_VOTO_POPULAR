@@ -11,7 +11,7 @@
  * - Não exporta identificadores anônimos (UIDs) ou dados sensíveis.
  */
 
-import { ProjectScoringResult } from './scoring';
+import type { ProjectScoringResult } from './scoring';
 
 /**
  * Extrai a lista ordenada de títulos de critérios
