@@ -873,14 +873,8 @@ export const EventService = {
         if (data) {
           onUpdate(mapEventRow(data));
         } else {
-          // Cria evento padrão se não existir
-          const { data: created } = await supabase
-            .from('events')
-            .insert({ id: eventId, name: 'Arena Voice 2026', status: 'active', results_published: false })
-            .select('*')
-            .single();
-
-          if (created && isSubscribed) onUpdate(mapEventRow(created));
+          // Se o evento não existe no banco, emite null (NUNCA auto-cria eventos em leituras)
+          onUpdate(null);
         }
       } catch (err: any) {
         if (isSubscribed && onError) onError(err);
